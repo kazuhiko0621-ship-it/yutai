@@ -55,6 +55,11 @@ nav button.active{color:#fff; border-bottom-color:var(--gold);}
   border-radius:99px; border:1px solid #CBD6CE; background:#fff; color:var(--muted); cursor:pointer;
 }
 .fchip.on{background:var(--green); color:#fff; border-color:var(--green);}
+/* 「すべて」を左端に固定し、月チップだけ横スクロール */
+.chipwrap{display:flex; gap:6px; align-items:flex-start; margin-bottom:10px;}
+.chipwrap > .fchip{position:relative;}
+.chipwrap > .fchip::after{content:""; position:absolute; right:-7px; top:4px; bottom:4px; width:1px; background:#CBD6CE;}
+.chipwrap .chipbar{flex:1; min-width:0; margin-bottom:0; padding-left:6px;}
 
 /* 消費ペース表示 */
 .t-pace{font-size:10px; font-weight:700; color:var(--amber); font-variant-numeric:tabular-nums;}
@@ -494,6 +499,9 @@ function renderList(){
   view = { name:"list" };
   setNav("list");
   let groups = groupBalances();
+  // 「使用済も表示」をOFFにして消えた月は、選択からも外す
+  const selectable = new Set(groups.filter(g => showUsed || g.total > 0).map(g => g.expiry.slice(0,7)));
+  for(const ym of [...listMonths]) if(!selectable.has(ym)) listMonths.delete(ym);
   if(listMonths.size > 0){
     groups = groups.filter(g => listMonths.has(g.expiry.slice(0,7)));
   }
@@ -510,8 +518,10 @@ function renderList(){
   const codeSet  = new Set(visible.map(g => g.code));
   const yenTotal = visible.filter(g => g.benefit_type !== "枚数").reduce((s,g)=> s + g.total, 0);
   const maiTotal = visible.filter(g => g.benefit_type === "枚数").reduce((s,g)=> s + g.total, 0);
-  // 期限月チップ：残額データが存在する月だけをyyyy/mm形式で動的に生成（複数選択可）
-  const monthSet = [...new Set(balances.map(r => r.expiry.slice(0,7)))].sort();
+  // 期限月チップ：一覧に出しうる月だけをyyyy/mm形式で動的に生成（複数選択可）
+  // 「使用済も表示」OFFなら残額のある月のみ、ONなら全月
+  const monthSet = [...new Set(groupBalances()
+    .filter(g => showUsed || g.total > 0).map(g => g.expiry.slice(0,7)))].sort();
   const monthChips = monthSet.map(ym =>
     `<button type="button" class="fchip ${listMonths.has(ym) ? "on" : ""}" data-ym="${ym}">${ym.replace("-","/")}</button>`).join("");
 
@@ -532,9 +542,9 @@ function renderList(){
       <div><span class="s-label">枚数合計</span><span class="s-val">${fmtNum(maiTotal)}<small> 枚</small></span></div>
     </div>
     ${monthSet.length > 0 ? `
-    <div class="chipbar">
+    <div class="chipwrap">
       <button type="button" class="fchip ${listMonths.size === 0 ? "on" : ""}" data-ym="all">すべて</button>
-      ${monthChips}
+      <div class="chipbar" id="month-chips">${monthChips}</div>
     </div>` : ""}
     <div class="toolbar">
       <select id="f-sort">
@@ -579,7 +589,10 @@ function renderList(){
     }
   }
   html += `<div style="height:60px;"></div>`;
+  const prevScroll = $("#month-chips")?.scrollLeft ?? null; // 再描画前の横スクロール位置
   app.innerHTML = html;
+  const mc = $("#month-chips");
+  if(mc && prevScroll !== null) mc.scrollLeft = prevScroll;
   const sw = $("#sw-used");
   if(sw) sw.onchange = e => { showUsed = e.target.checked; renderList(); };
   const nx = $("#notice-x");
