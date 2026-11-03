@@ -66,6 +66,25 @@ def komeda():
 
 
 # ---------------------------------------------------------------------------
+# マクドナルド（地図範囲指定のAPI。県の範囲を格子に分けて取得）
+# ---------------------------------------------------------------------------
+AICHI_BOUNDS = (34.55, 136.65, 35.45, 137.85)  # 南, 西, 北, 東
+
+
+def mcdonalds():
+    s, w, n, e = AICHI_BOUNDS
+    grid, rows = 6, {}
+    for i in range(grid):
+        for k in range(grid):
+            b = (s + (n - s) * i / grid, w + (e - w) * k / grid,
+                 s + (n - s) * (i + 1) / grid, w + (e - w) * (k + 1) / grid)
+            for p in get("https://map.mcdonalds.co.jp/api/poi", {"bounds": ",".join(f"{v:.5f}" for v in b)}):
+                rows[p["key"]] = {"id": p["key"], "b": "マクドナルド", "n": p["name"], "a": p["address"],
+                                  "lat": p["latitude"], "lng": p["longitude"]}
+    return list(rows.values())
+
+
+# ---------------------------------------------------------------------------
 # 登録一覧（code は優待手帳の銘柄マスタのコードと一致させる）
 # ---------------------------------------------------------------------------
 SOURCES = [
@@ -82,5 +101,11 @@ SOURCES = [
         "url": "https://www.komeda.co.jp/shop/",
         "note": "KOMECA取扱店のみ。おかげ庵は一部店舗で利用不可",
         "fetch": komeda,
+    },
+    {
+        "code": "2702", "name": "日本マクドナルドホールディングス", "brands": ["マクドナルド"],
+        "url": "https://map.mcdonalds.co.jp/",
+        "note": "一部の店舗（球場・空港内など）では利用できない場合があります",
+        "fetch": mcdonalds,
     },
 ]

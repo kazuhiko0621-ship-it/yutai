@@ -13,6 +13,7 @@ on:
   push:
     paths:
       - "scripts/stores/**"
+      - ".github/workflows/update-stores.yml"
 
 permissions:
   contents: write
@@ -34,7 +35,7 @@ jobs:
         run: python3 scripts/stores/collect.py ${{ github.event.inputs.codes }}
       - name: 変更をコミット
         run: |
-          if git diff --quiet -- stores.json stores_changes.md; then
+          if [ -z "$(git status --porcelain -- stores.json stores_changes.md)" ]; then
             echo "変更なし"; exit 0
           fi
           git config user.name "github-actions[bot]"
