@@ -67,6 +67,10 @@ def main(only):
             for s in got:
                 s["c"] = code
                 s["id"] = str(s["id"])
+                # 「吉野家 栄店」のように店舗名の先頭にブランド名があれば省く（ブランドは別欄に出る）
+                b = s.get("b", "")
+                if b and s["n"].startswith(b) and len(s["n"]) > len(b):
+                    s["n"] = s["n"][len(b):].lstrip(" 　")
                 if store_key(s) in seen:
                     continue
                 seen.add(store_key(s))

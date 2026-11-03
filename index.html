@@ -245,6 +245,31 @@ input:disabled{background:#EEF1ED; color:#7B8781;}
   max-width:88vw; text-align:center;
 }
 #toast.show{opacity:1; transform:translateX(-50%) translateY(0);}
+
+/* ------- 店舗マップ ------- */
+.map-search{display:flex; gap:6px; margin-bottom:8px;}
+.map-search input{flex:1; min-width:0; font-size:16px; padding:8px 12px;}
+.map-search .btn{flex-shrink:0;}
+#storeMap{height:44vh; min-height:260px; border-radius:var(--radius); border:1px solid var(--line); margin-bottom:10px; z-index:1; background:#E8EEE9;}
+.st-item{
+  background:var(--card); border:1px solid var(--line); border-radius:12px;
+  padding:8px 12px; margin-bottom:6px; display:flex; gap:10px; align-items:center; cursor:pointer;
+}
+.st-item:active{transform:scale(.99);}
+.st-dot{width:10px; height:10px; border-radius:50%; flex-shrink:0;}
+.st-main{flex:1; min-width:0;}
+.st-name{font-size:14px; font-weight:800; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+.st-meta{font-size:11.5px; color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+.st-bal{font-size:11.5px; font-weight:800; color:var(--green); font-variant-numeric:tabular-nums;}
+.st-bal.none{color:#9AA8A1; font-weight:700;}
+.st-dist{flex-shrink:0; text-align:right; font-size:13px; font-weight:800; font-variant-numeric:tabular-nums; color:var(--ink);}
+.st-dist a{display:block; font-size:11px; font-weight:700; color:var(--green); text-decoration:none; margin-top:2px;}
+.st-note{font-size:11px; color:var(--amber); font-weight:700;}
+.map-foot{font-size:11px; color:var(--muted); margin-top:12px; line-height:1.7;}
+.map-foot b{color:var(--ink);}
+.leaflet-popup-content{font-family:inherit; font-size:12.5px; line-height:1.55; margin:10px 12px;}
+.leaflet-popup-content .pp-name{font-size:14px; font-weight:800;}
+.leaflet-popup-content a{color:var(--green); font-weight:800;}
 @media (prefers-reduced-motion: reduce){ *{transition:none !important;} }
 </style>
 </head>
@@ -256,6 +281,7 @@ input:disabled{background:#EEF1ED; color:#7B8781;}
     <button id="nav-bycode">残高(銘柄別)</button>
     <button id="nav-log">ログ</button>
     <button id="nav-master">銘柄マスタ</button>
+    <button id="nav-map">店舗マップ</button>
   </nav>
 </header>
 <main id="app"><div class="empty">読み込み中…</div></main>
@@ -1244,6 +1270,227 @@ function renderMasterForm(m, isCopy = false){
   }
 }
 
+/* ---------------- 画面：店舗マップ ----------------
+   stores.json（GitHub Actionsが定期更新）を読み、保有銘柄の店舗だけを地図に表示する。
+   残額は yutai_balance から銘柄コード単位で集計して添える。 */
+let storeData = null;
+const mapState = { base:null, baseLabel:"", center:null, zoom:null, hidden:new Set(), showAll:false };
+let leafletReady = null;
+let storeMap = null;
+const normCode = c => String(c ?? "").toUpperCase();
+
+function loadLeaflet(){
+  if(window.L) return Promise.resolve();
+  if(leafletReady) return leafletReady;
+  leafletReady = new Promise((res, rej) => {
+    const css = document.createElement("link");
+    css.rel = "stylesheet"; css.href = "https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css";
+    document.head.appendChild(css);
+    const s = document.createElement("script");
+    s.src = "https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js";
+    s.onload = res;
+    s.onerror = () => { leafletReady = null; rej(new Error("地図ライブラリを読み込めませんでした。通信環境をご確認ください。")); };
+    document.head.appendChild(s);
+  });
+  return leafletReady;
+}
+async function loadStores(){
+  if(storeData) return storeData;
+  const res = await fetch("./stores.json", { cache:"no-cache" });
+  if(!res.ok) throw new Error("店舗データ（stores.json）が見つかりません。");
+  storeData = await res.json();
+  return storeData;
+}
+function distKm(a, b){
+  const R = 6371, rad = Math.PI / 180;
+  const dLat = (b.lat - a.lat) * rad, dLng = (b.lng - a.lng) * rad;
+  const h = Math.sin(dLat/2)**2 + Math.cos(a.lat*rad) * Math.cos(b.lat*rad) * Math.sin(dLng/2)**2;
+  return 2 * R * Math.asin(Math.sqrt(h));
+}
+function fmtDist(km){ return km < 1 ? `${Math.round(km * 1000)}m` : `${km.toFixed(km < 10 ? 1 : 0)}km`; }
+/* 銘柄コードごとの使える残額（期限内・残額あり）を合計し、最も近い期限を添える */
+function balanceOf(code){
+  const rows = balances.filter(r => normCode(r.code) === code && Number(r.balance) > 0 && daysLeft(r.expiry) >= 0);
+  if(!rows.length) return null;
+  const total = rows.reduce((s, r) => s + Number(r.balance), 0);
+  const expiry = rows.map(r => r.expiry).sort()[0];
+  return { total, unit:unit(rows[0].benefit_type), expiry };
+}
+function balanceText(code){
+  const b = balanceOf(code);
+  return b ? `残 ${fmtNum(b.total)}${b.unit}（〜${fmtDate(b.expiry).slice(5)}）` : "使える残額なし";
+}
+/* 駅名・住所 → 座標。駅はHeartRails Express、住所は国土地理院の住所検索を使う */
+async function geocodeQuery(q){
+  q = q.trim();
+  if(!q) return null;
+  const looksAddress = /[都道府県市区町村郡]|丁目|番地/.test(q) && !/駅$/.test(q);
+  if(!looksAddress){
+    try{
+      const j = await (await fetch("https://express.heartrails.com/api/json?method=getStations&name=" + encodeURIComponent(q.replace(/駅$/, "")))).json();
+      const st = j.response?.station || [];
+      const pick = st.find(s => s.prefecture === "愛知県") || st[0];
+      if(pick) return { lat:+pick.y, lng:+pick.x, label:`${pick.name}駅` };
+    }catch(e){ console.warn(e); }
+  }
+  try{
+    const r = await (await fetch("https://msearch.gsi.go.jp/address-search/AddressSearch?q=" + encodeURIComponent(q))).json();
+    if(r.length){
+      const hit = r.find(x => x.properties.title.startsWith("愛知県")) || r[0];
+      return { lat:hit.geometry.coordinates[1], lng:hit.geometry.coordinates[0], label:hit.properties.title };
+    }
+  }catch(e){ console.warn(e); }
+  return null;
+}
+
+async function renderMap(){
+  view = { name:"map" };
+  setNav("map");
+  setFab(null);
+  app.innerHTML = `<div class="empty">店舗データを読み込み中…</div>`;
+  let data;
+  try{ [data] = await Promise.all([loadStores(), loadLeaflet()]); }
+  catch(e){ app.innerHTML = `<div class="err">${esc(e.message ?? e)}</div>`; return; }
+  if(view.name !== "map") return;
+
+  const held = new Set(masters.map(m => normCode(m.code)));
+  const comps = Object.entries(data.companies)
+    .map(([code, v]) => ({ code:normCode(code), ...v }))
+    .filter(c => c.count || c.error);
+  const shown = comps.filter(c => mapState.showAll || held.has(c.code));
+  const color = {};
+  comps.forEach((c, i) => color[c.code] = `hsl(${Math.round(i * 137.5) % 360} 62% 40%)`);
+  const compOf = Object.fromEntries(comps.map(c => [c.code, c]));
+  const label = c => (c.brands || [c.name]).join("・");
+  const missing = [...new Map(masters.filter(m => !compOf[normCode(m.code)]).map(m => [normCode(m.code), m.name])).values()];
+
+  app.innerHTML = `
+    <div class="map-search">
+      <input type="text" id="mq" placeholder="駅名・住所（例：栄、日進市梅森台）" value="${esc(mapState.baseLabel)}" enterkeyhint="search">
+      <button class="btn primary small" id="mgo">検索</button>
+      <button class="btn ghost small" id="mloc">現在地</button>
+    </div>
+    <div class="chipbar" id="mchips">
+      ${shown.map(c => `<button class="fchip ${!mapState.hidden.has(c.code) ? "on" : ""}" data-code="${esc(c.code)}">
+        <span style="color:${!mapState.hidden.has(c.code) ? "#fff" : color[c.code]}">●</span> ${esc(label(c))}</button>`).join("")}
+    </div>
+    <div id="storeMap"></div>
+    <div class="row-between" style="margin:0 2px 8px;">
+      <h2 style="margin:0;">近い店舗</h2>
+      <span class="sub" id="mbase"></span>
+    </div>
+    <div id="mlist"></div>
+    <label class="switch" style="margin-top:10px;"><input type="checkbox" id="mall" ${mapState.showAll ? "checked" : ""}><span class="sw-track"></span>保有していない銘柄の店舗も表示</label>
+    <div class="map-foot">
+      店舗データ：<b>${esc(data.area)}</b>・${esc(data.updated)} 更新（3か月ごとに自動更新）<br>
+      ${shown.filter(c => c.note || c.error).map(c => `・<b>${esc(label(c))}</b>：${esc(c.note || "")}${c.error ? `<span class="st-note">（前回更新に失敗：${esc(c.error)}）</span>` : ""}`).join("<br>")}
+      ${missing.length ? `<br>地図に未収録の保有銘柄：${missing.map(esc).join("、")}` : ""}
+      <br>距離は直線距離です。所要時間は「経路」から Google マップで確認できます。
+    </div>`;
+
+  const stores = data.stores.filter(s => !mapState.hidden.has(normCode(s.c)) && s.lat);
+  if(storeMap){ storeMap.remove(); storeMap = null; }
+  storeMap = L.map("storeMap", { preferCanvas:true, zoomControl:true });
+  L.tileLayer("https://cyberjapandata.gsi.go.jp/xyz/pale/{z}/{x}/{y}.png", {
+    maxZoom:18, attribution:'<a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank" rel="noopener">地理院タイル</a>'
+  }).addTo(storeMap);
+  storeMap.setView(mapState.center || mapState.base || [35.17, 136.91], mapState.zoom || 12);
+
+  const popup = s => {
+    const c = compOf[normCode(s.c)] || {};
+    return `<div class="pp-name">${esc(s.n)}</div>
+      <div>${esc(s.b || "")}・${esc(c.name || s.c)}</div>
+      <div class="sub">${esc(s.a)}</div>
+      <div class="st-bal ${balanceOf(normCode(s.c)) ? "" : "none"}">${esc(balanceText(normCode(s.c)))}</div>
+      ${s.x ? `<div class="st-note">${esc(s.x)}</div>` : ""}
+      ${s.geo ? `<div class="sub">※位置は住所からの推定です</div>` : ""}
+      <a href="https://www.google.com/maps/dir/?api=1&destination=${s.lat},${s.lng}" target="_blank" rel="noopener">経路（Googleマップ）</a>`;
+  };
+  const markers = new Map();
+  for(const s of stores){
+    const m = L.circleMarker([s.lat, s.lng], { radius:6, weight:1.5, color:"#fff", fillColor:color[normCode(s.c)], fillOpacity:.95 })
+      .bindPopup(() => popup(s)).addTo(storeMap);
+    markers.set(`${s.c}|${s.id}`, m);
+  }
+  let baseMarker = null;
+  function drawBase(){
+    if(baseMarker){ baseMarker.remove(); baseMarker = null; }
+    if(mapState.base){
+      baseMarker = L.circleMarker([mapState.base.lat, mapState.base.lng], { radius:8, weight:3, color:"#C79A3B", fillColor:"#fff", fillOpacity:1 })
+        .bindTooltip(mapState.baseLabel || "基準地点").addTo(storeMap);
+    }
+  }
+  function renderNearList(){
+    const c = storeMap.getCenter();
+    const base = mapState.base || { lat:c.lat, lng:c.lng };
+    $("#mbase").textContent = mapState.base ? `${mapState.baseLabel || "指定地点"}から` : "地図の中心から";
+    const near = stores.map(s => ({ s, d:distKm(base, s) })).sort((a, b) => a.d - b.d).slice(0, 10);
+    $("#mlist").innerHTML = near.length ? near.map(({ s, d }) => {
+      const code = normCode(s.c), comp = compOf[code] || {};
+      const has = !!balanceOf(code);
+      return `<div class="st-item" data-key="${esc(`${s.c}|${s.id}`)}">
+        <span class="st-dot" style="background:${color[code]}"></span>
+        <div class="st-main">
+          <div class="st-name">${esc(s.n)}</div>
+          <div class="st-meta">${esc(s.b || "")}・${esc(comp.name || code)}</div>
+          <div class="st-bal ${has ? "" : "none"}">${esc(balanceText(code))}${s.x ? ` <span class="st-note">${esc(s.x)}</span>` : ""}</div>
+        </div>
+        <div class="st-dist">${fmtDist(d)}
+          <a href="https://www.google.com/maps/dir/?api=1&destination=${s.lat},${s.lng}" target="_blank" rel="noopener">経路 ›</a>
+        </div>
+      </div>`;
+    }).join("") : `<div class="empty" style="padding:24px 10px;">表示する店舗がありません</div>`;
+  }
+  drawBase();
+  renderNearList();
+
+  storeMap.on("moveend", () => {
+    mapState.center = storeMap.getCenter(); mapState.zoom = storeMap.getZoom();
+    if(!mapState.base) renderNearList();
+  });
+  $("#mlist").onclick = e => {
+    if(e.target.closest("a")) return;
+    const it = e.target.closest(".st-item"); if(!it) return;
+    const m = markers.get(it.dataset.key); if(!m) return;
+    storeMap.setView(m.getLatLng(), Math.max(storeMap.getZoom(), 15));
+    m.openPopup();
+    $("#storeMap").scrollIntoView({ behavior:"smooth", block:"center" });
+  };
+  $("#mchips").onclick = e => {
+    const b = e.target.closest(".fchip"); if(!b) return;
+    const code = b.dataset.code;
+    mapState.hidden.has(code) ? mapState.hidden.delete(code) : mapState.hidden.add(code);
+    renderMap();
+  };
+  $("#mall").onchange = e => { mapState.showAll = e.target.checked; renderMap(); };
+  const setBase = (p, lbl) => {
+    mapState.base = { lat:p.lat, lng:p.lng }; mapState.baseLabel = lbl;
+    storeMap.setView([p.lat, p.lng], 14);
+    drawBase(); renderNearList();
+  };
+  const search = async () => {
+    const q = $("#mq").value.trim();
+    if(!q){ mapState.base = null; mapState.baseLabel = ""; drawBase(); renderNearList(); return; }
+    $("#mgo").disabled = true;
+    const p = await geocodeQuery(q);
+    $("#mgo").disabled = false;
+    if(!p){ toast("場所が見つかりませんでした"); return; }
+    setBase(p, p.label);
+    $("#mq").value = p.label;
+  };
+  $("#mgo").onclick = search;
+  $("#mq").onkeydown = e => { if(e.key === "Enter"){ e.preventDefault(); search(); } };
+  $("#mloc").onclick = () => {
+    if(!navigator.geolocation){ toast("この端末では現在地を取得できません"); return; }
+    $("#mloc").disabled = true;
+    navigator.geolocation.getCurrentPosition(
+      pos => { $("#mloc").disabled = false; setBase({ lat:pos.coords.latitude, lng:pos.coords.longitude }, "現在地"); $("#mq").value = ""; },
+      () => { $("#mloc").disabled = false; toast("現在地を取得できませんでした（位置情報の許可をご確認ください）"); },
+      { enableHighAccuracy:true, timeout:15000, maximumAge:60000 }
+    );
+  };
+}
+
 /* ---------------- 共通UI ---------------- */
 let fabEl = null;
 function setFab(label, handler){
@@ -1258,7 +1505,9 @@ function setNav(active){
   $("#nav-bycode").classList.toggle("active", active === "bycode");
   $("#nav-log").classList.toggle("active", active === "log");
   $("#nav-master").classList.toggle("active", active === "master");
+  $("#nav-map").classList.toggle("active", active === "map");
 }
+$("#nav-map").onclick = () => { if(confirmLeaveDetail()) renderMap(); };
 $("#nav-list").onclick = () => { if(confirmLeaveDetail()) renderList(); };
 $("#nav-bycode").onclick = () => { if(confirmLeaveDetail()) renderByCode(); };
 $("#nav-log").onclick = () => { if(confirmLeaveDetail()) renderLog(); };
