@@ -1,5 +1,5 @@
 // 優待手帳 Service Worker
-const CACHE = "yutai-v9";
+const CACHE = "yutai-v10";
 const SHELL = [
   "./",
   "./index.html",
@@ -38,7 +38,7 @@ self.addEventListener("fetch", (e) => {
     return;
   }
   // 地図タイル・駅/住所検索はキャッシュしない
-  if (/gsi\.go\.jp|heartrails\.com/.test(url)) return;
+  if (/gsi\.go\.jp|cartocdn\.com|heartrails\.com/.test(url)) return;
   e.respondWith(
     caches.match(e.request).then((hit) => {
       if (hit) return hit;

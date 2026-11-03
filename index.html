@@ -1404,8 +1404,10 @@ async function renderMap(){
   const stores = data.stores.filter(s => !mapState.hidden.has(normCode(s.c)) && s.lat);
   if(storeMap){ storeMap.remove(); storeMap = null; }
   storeMap = L.map("storeMap", { preferCanvas:true, zoomControl:true });
-  L.tileLayer("https://cyberjapandata.gsi.go.jp/xyz/pale/{z}/{x}/{y}.png", {
-    maxZoom:18, attribution:'<a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank" rel="noopener">地理院タイル</a>'
+  // CARTO Positron（文字なし）：地名を出さないフラットな地図
+  L.tileLayer("https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}{r}.png", {
+    maxZoom:19, subdomains:"abcd",
+    attribution:'&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions" target="_blank" rel="noopener">CARTO</a>'
   }).addTo(storeMap);
   storeMap.setView(mapState.center || mapState.base || [35.17, 136.91], mapState.zoom || 12);
 
@@ -1421,7 +1423,7 @@ async function renderMap(){
   };
   const markers = new Map();
   for(const s of stores){
-    const m = L.circleMarker([s.lat, s.lng], { radius:6, weight:1.5, color:"#fff", fillColor:color[normCode(s.c)], fillOpacity:.95 })
+    const m = L.circleMarker([s.lat, s.lng], { radius:5, weight:1, color:"#fff", fillColor:color[normCode(s.c)], fillOpacity:.95 })
       .bindPopup(() => popup(s)).addTo(storeMap);
     markers.set(`${s.c}|${s.id}`, m);
   }
