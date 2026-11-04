@@ -1,5 +1,5 @@
 // 優待手帳 Service Worker
-const CACHE = "yutai-v12";
+const CACHE = "yutai-v13";
 const SHELL = [
   "./",
   "./index.html",
@@ -28,7 +28,7 @@ self.addEventListener("fetch", (e) => {
   // Supabase へのAPI通信はキャッシュしない（常にネットワーク）
   if (e.request.method !== "GET" || url.includes("supabase.co")) return;
   // 店舗データは定期更新されるので、ネットワーク優先（オフライン時のみキャッシュ）
-  if (url.includes("/stores.json")) {
+  if (url.includes("/stores.json") || url.includes("/subway.geojson")) {
     e.respondWith(
       fetch(e.request).then((res) => {
         if (res.ok) { const copy = res.clone(); caches.open(CACHE).then((c) => c.put(e.request, copy)); }

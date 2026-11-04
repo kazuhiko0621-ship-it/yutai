@@ -1351,6 +1351,30 @@ async function loadBaseStyle(){
       "symbol-sort-key":["coalesce", ["get", "rank"], 99] },
     paint:{ "text-color":"#2F3A40", "text-halo-color":"rgba(255,255,255,.95)", "text-halo-width":1.6 }
   });
+  // 地下鉄（路線ごとのラインカラー・駅）：GitHub Actionsが OpenStreetMap から作る subway.geojson を重ねる
+  try{
+    const res = await fetch("./subway.geojson", { cache:"no-cache" });
+    if(res.ok){
+      st.sources["yutai-subway"] = { type:"geojson", data:await res.json() };
+      const lineW = ["interpolate", ["linear"], ["zoom"], 10, 1.6, 13, 3, 16, 5];
+      st.layers.push(
+        { id:"yutai-subway-casing", type:"line", source:"yutai-subway", filter:["==", ["get", "kind"], "line"],
+          layout:{ "line-cap":"round", "line-join":"round" },
+          paint:{ "line-color":"#fff", "line-width":["interpolate", ["linear"], ["zoom"], 10, 3, 13, 5, 16, 8] } },
+        { id:"yutai-subway-line", type:"line", source:"yutai-subway", filter:["==", ["get", "kind"], "line"],
+          layout:{ "line-cap":"round", "line-join":"round" },
+          paint:{ "line-color":["get", "color"], "line-width":lineW, "line-opacity":.9 } },
+        { id:"yutai-subway-dot", type:"circle", source:"yutai-subway", minzoom:11, filter:["==", ["get", "kind"], "station"],
+          paint:{ "circle-radius":["interpolate", ["linear"], ["zoom"], 11, 2.5, 15, 4.5],
+            "circle-color":"#fff", "circle-stroke-color":"#4A565E", "circle-stroke-width":1.5 } },
+        { id:"yutai-subway-name", type:"symbol", source:"yutai-subway", minzoom:11, filter:["==", ["get", "kind"], "station"],
+          layout:{ "text-field":["get", "name"], "text-font":font,
+            "text-size":["interpolate", ["linear"], ["zoom"], 11, 10.5, 15, 13],
+            "text-offset":[0, 0.9], "text-anchor":"top", "text-max-width":8 },
+          paint:{ "text-color":"#2F3A40", "text-halo-color":"rgba(255,255,255,.95)", "text-halo-width":1.6 } }
+      );
+    }
+  }catch(e){ console.warn("地下鉄データを読み込めませんでした", e); }
   return baseStyle = st;
 }
 async function loadStores(){
