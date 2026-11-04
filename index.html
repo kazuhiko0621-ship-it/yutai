@@ -314,6 +314,7 @@ const TYPES    = ["金額","枚数"];
 let sb = null;
 let masters = [];   // yutai_master
 let balances = [];  // yutai_balance
+let scopes = {};    // yutai_store_scope（銘柄コード→{scope, exclude_brands}）
 let logs = [];      // yutai_log（残額ログ。null=テーブル未作成）
 let showUsed = false;
 let showUnrecvOnly = false; // 受取なしのみ表示（受取済の更新漏れ確認用）
@@ -415,6 +416,11 @@ async function loadAll(){
   if(m.error) throw m.error;
   if(b.error) throw b.error;
   masters = m.data; balances = b.data;
+  try{
+    const sc = await sb.from("yutai_store_scope").select("*");
+    if(sc.error) console.warn(sc.error);
+    else scopes = Object.fromEntries(sc.data.map(r => [String(r.code).toUpperCase(), r]));
+  }catch(e){ console.warn(e); }
   // 残額ログ（テーブル未作成でも他画面は動くよう、エラーは握りつぶして印だけ残す）
   try{
     const l = await sb.from("yutai_log").select("*");
@@ -1192,7 +1198,21 @@ function renderMasterForm(m, isCopy = false){
       <button class="btn ghost" id="m-copy">コピーして新規作成</button>
       <button class="btn danger" id="m-del" style="flex:0 0 110px;">削除</button>
     </div>` : ""}
-  </div>`;
+  </div>
+  ${isEdit ? `
+  <div class="card" id="scope-card">
+    <h3 style="margin:0 0 4px;">店舗マップの取得範囲</h3>
+    <p class="sub" style="margin:0 0 10px;">この銘柄コードの全口座で共通です。</p>
+    <div class="seg" id="sc-seg">
+      <button type="button" data-v="all">全て</button>
+      <button type="button" data-v="some">一部</button>
+      <button type="button" data-v="none">なし</button>
+    </div>
+    <p class="sub" id="sc-help" style="margin:8px 0 0;"></p>
+    <div id="sc-brands" style="margin-top:10px;"></div>
+    <button class="btn primary" id="sc-save" style="margin-top:12px;">取得範囲を保存</button>
+  </div>` : ""}
+`;
   $("#back").onclick = renderMasterList;
   app.querySelectorAll(".acct-tab").forEach(t => t.onclick = () => {
     if(t.dataset.acct === m.account) return;
@@ -1280,6 +1300,8 @@ function renderMasterForm(m, isCopy = false){
     renderMasterList();
   };
 
+  if(isEdit) setupScopeCard(normCode(m.code));
+
   if(isEdit){
     $("#m-copy").onclick = () => renderMasterForm(m, true);
     $("#m-del").onclick = async () => {
@@ -1289,6 +1311,42 @@ function renderMasterForm(m, isCopy = false){
       await loadAll(); toast("マスタを削除しました"); renderMasterList();
     };
   }
+}
+
+/* 銘柄マスタ画面：店舗マップの取得範囲（全て／一部／なし、一部は除外ブランドを選ぶ） */
+async function setupScopeCard(code){
+  const cur = scopes[code] || { scope:"all", exclude_brands:[] };
+  let scope = cur.scope;
+  const excluded = new Set(cur.exclude_brands || []);
+  let catalog = {};
+  try{ catalog = (await loadStores()).companies?.[code]?.brand_counts || {}; }catch(e){ console.warn(e); }
+  if(!$("#scope-card")) return;
+  const names = [...new Set([...Object.keys(catalog), ...excluded])];
+  function draw(){
+    $("#sc-seg").querySelectorAll("button").forEach(b => b.classList.toggle("on", b.dataset.v === scope));
+    $("#sc-help").textContent = { all:"この会社の全ブランドの店舗を地図に表示します。",
+      some:"チェックしたブランドを除いて表示します（新しいブランドは自動で表示されます）。",
+      none:"この銘柄の店舗は収集・表示しません。" }[scope];
+    if(scope !== "some"){ $("#sc-brands").innerHTML = ""; return; }
+    $("#sc-brands").innerHTML = `
+      ${names.length ? names.map(n => `<label class="switch" style="margin:4px 0;"><input type="checkbox" data-b="${esc(n)}" ${excluded.has(n) ? "checked" : ""}><span class="sw-track"></span>${esc(n)} を除外${catalog[n] != null ? `<span class="sub">（${catalog[n]}店）</span>` : ""}</label>`).join("")
+        : `<p class="sub">ブランドの一覧はまだありません（店舗収集の対象になると表示されます）。</p>`}
+      <div class="field" style="margin-top:8px;"><label>一覧にないブランドを除外（「、」区切り）</label><input type="text" id="sc-extra" placeholder="例：はなまるうどん"></div>`;
+    $("#sc-brands").querySelectorAll("input[data-b]").forEach(cb => cb.onchange = () => { cb.checked ? excluded.add(cb.dataset.b) : excluded.delete(cb.dataset.b); });
+  }
+  $("#sc-seg").onclick = e => { const b = e.target.closest("button"); if(!b) return; scope = b.dataset.v; draw(); };
+  draw();
+  $("#sc-save").onclick = async () => {
+    const extra = ($("#sc-extra")?.value || "").split(/[、,，]/).map(x => x.trim()).filter(Boolean);
+    extra.forEach(x => excluded.add(x));
+    if(scope === "some" && !excluded.size){ toast("除外するブランドを選んでください"); return; }
+    const row = { code, scope, exclude_brands:scope === "some" ? [...excluded] : [], updated_at:new Date().toISOString() };
+    const { error } = await sb.from("yutai_store_scope").upsert(row);
+    if(error){ toast("保存に失敗しました"); console.error(error); return; }
+    scopes[code] = row;
+    toast("取得範囲を保存しました（地図には次回の店舗収集で反映）");
+    draw();
+  };
 }
 
 /* ---------------- 画面：店舗マップ ----------------
@@ -1450,12 +1508,13 @@ async function renderMap(){
   const comps = Object.entries(data.companies)
     .map(([code, v]) => ({ code:normCode(code), ...v }))
     .filter(c => c.count || c.error);
-  const shown = comps.filter(c => mapState.showAll || held.has(c.code));
+  const shown = comps.filter(c => (mapState.showAll || held.has(c.code)) && scopes[c.code]?.scope !== "none");
   const color = {};
   comps.forEach((c, i) => color[c.code] = `hsl(${Math.round(i * 137.5) % 360} 62% 40%)`);
   const compOf = Object.fromEntries(comps.map(c => [c.code, c]));
   const label = c => (c.brands || [c.name]).join("・");
-  const missing = [...new Map(masters.filter(m => !compOf[normCode(m.code)]).map(m => [normCode(m.code), m.name])).values()];
+  const missing = [...new Map(masters.filter(m => !compOf[normCode(m.code)] && scopes[normCode(m.code)]?.scope !== "none")
+    .map(m => [normCode(m.code), m.name])).values()];
 
   app.innerHTML = `
     <div class="map-search">
@@ -1481,7 +1540,14 @@ async function renderMap(){
       <br>距離は直線距離です。所要時間は「経路」から Google マップで確認できます。
     </div>`;
 
-  const stores = data.stores.filter(s => !mapState.hidden.has(normCode(s.c)) && s.lat);
+  // 取得範囲（なし／除外ブランド）は地図側でも反映（次回収集を待たずに効くように）
+  const inScope = s => {
+    const sc = scopes[normCode(s.c)];
+    if(!sc) return true;
+    if(sc.scope === "none") return false;
+    return !(sc.scope === "some" && (sc.exclude_brands || []).includes(s.b));
+  };
+  const stores = data.stores.filter(s => !mapState.hidden.has(normCode(s.c)) && s.lat && inScope(s));
   if(storeMap){ storeMap.remove(); storeMap = null; }
   storeMap = L.map("storeMap", { preferCanvas:true, zoomControl:true });
   const osmAttr = '<a href="https://openfreemap.org" target="_blank" rel="noopener">OpenFreeMap</a> &copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>';

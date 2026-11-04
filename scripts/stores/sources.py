@@ -47,7 +47,10 @@ def navitime(base, brand_of=None, extra=None):
 # ---------------------------------------------------------------------------
 def komeda():
     api = "https://eu.komeda.co.jp/v1/hp/shop"
-    brands = {1: "コメダ珈琲店", 2: "おかげ庵"}
+    # 8=コメダ珈琲店（海外）は対象外。ブランド名はサイトのメタデータから取る
+    meta = get("https://eu.komeda.co.jp/v1/hp/shop-meta-data")
+    bt = next(f for f in meta["fields"] if f["name"] == "brand_type")
+    brands = {int(v["id"]): v["display_name"] for v in bt["values"] if v["id"] != "8"}
     rows = []
     for bt, bname in brands.items():
         lst = get(api, {"brand_type": bt, "all": "true", "prefecture": PREF})["items"]
@@ -97,9 +100,9 @@ SOURCES = [
                           extra={"exclude-category": "0101003.02"}),
     },
     {
-        "code": "3543", "name": "コメダホールディングス", "brands": ["コメダ珈琲店", "おかげ庵"],
+        "code": "3543", "name": "コメダホールディングス", "brands": ["おかげ庵", "KOMEDA is □", "BAKERY ADEMOK", "大餡吉日", "ジェリコ堂", "米屋の太郎"],
         "url": "https://www.komeda.co.jp/shop/",
-        "note": "KOMECA取扱店のみ。おかげ庵は一部店舗で利用不可",
+        "note": "KOMECA取扱店のみ",
         "fetch": komeda,
     },
     {
