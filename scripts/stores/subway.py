@@ -6,18 +6,17 @@ route=subway のリレーション（colour タグ付き）と地下鉄駅を取
 GitHub Actions（update-stores.yml）から店舗データと一緒に定期実行される。
 """
 import json
-import sys
 import urllib.parse
 import urllib.request
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-from common import UA  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 OUT = ROOT / "subway.geojson"
 PREF = "愛知県"
-ENDPOINTS = ["https://overpass-api.de/api/interpreter", "https://overpass.kumi.systems/api/interpreter"]
+ENDPOINTS = ["https://overpass-api.de/api/interpreter", "https://overpass.private.coffee/api/interpreter",
+             "https://overpass.kumi.systems/api/interpreter"]
+OVERPASS_UA = "yutai-store-map/1.0 (+https://github.com/kazuhiko0621-ship-it/yutai)"
 
 # OSMに colour が無い場合の公式カラー（名古屋市営地下鉄）
 FALLBACK = {"東山線": "#E3A21A", "名城線": "#7E57A3", "名港線": "#7E57A3",
@@ -40,7 +39,9 @@ def overpass():
     last = None
     for ep in ENDPOINTS:
         try:
-            req = urllib.request.Request(ep, data=data, headers={"User-Agent": UA})
+            req = urllib.request.Request(ep, data=data, headers={
+                "User-Agent": OVERPASS_UA, "Accept": "application/json, */*",
+                "Content-Type": "application/x-www-form-urlencoded"})
             with urllib.request.urlopen(req, timeout=240) as r:
                 return json.loads(r.read().decode("utf-8"))
         except Exception as e:  # noqa: BLE001
