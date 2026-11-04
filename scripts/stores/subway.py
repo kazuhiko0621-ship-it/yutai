@@ -22,14 +22,16 @@ OVERPASS_UA = "yutai-store-map/1.0 (+https://github.com/kazuhiko0621-ship-it/yut
 FALLBACK = {"東山線": "#E3A21A", "名城線": "#7E57A3", "名港線": "#7E57A3",
             "鶴舞線": "#0F78B9", "桜通線": "#D2122F", "上飯田線": "#E85298"}
 
+# 名古屋市営地下鉄が収まる範囲（南,西,北,東）
+BBOX = "34.95,136.75,35.30,137.10"
 QUERY = f"""
-[out:json][timeout:180];
-area["name"="{PREF}"]["admin_level"="4"]->.a;
+[out:json][timeout:180][bbox:{BBOX}];
 (
-  rel(area.a)["route"="subway"];
-)->.r;
-.r out tags geom;
-node(area.a)["railway"="station"]["station"="subway"];
+  rel["route"="subway"];
+  rel["route"="train"]["network"~"名古屋市営地下鉄|名古屋市交通局"];
+);
+out tags geom;
+node["railway"="station"]["station"="subway"];
 out body;
 """
 
@@ -61,6 +63,10 @@ def line_name(tags):
 
 def main():
     j = overpass()
+    kinds = {}
+    for el in j["elements"]:
+        kinds[el["type"]] = kinds.get(el["type"], 0) + 1
+    print(f"[info] Overpass応答: {kinds}")
     feats, seen_lines = [], {}
     for el in j["elements"]:
         if el["type"] == "relation":
