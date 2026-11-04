@@ -459,6 +459,22 @@ def kichiri():
 
 
 # ---------------------------------------------------------------------------
+# FOOD & LIFE：鮨 酒 肴 杉玉（公式の店舗一覧ページ）
+# ---------------------------------------------------------------------------
+def sugidama():
+    import html as H
+    import re
+    body = get("https://www.sugidama-sushiizakaya.jp/shop/", as_json=False)
+    rows = {}
+    for sid, name, addr in re.findall(r'href="/shop/(\d+)/" class="s_name">(.*?)</a>.*?class="s_address">(.*?)</p>', body, re.S):
+        a = re.sub(r"\s+", " ", H.unescape(addr)).strip()
+        if a.startswith(PREF):
+            n = H.unescape(name).strip()
+            rows[sid] = {"id": sid, "b": "杉玉", "n": n.replace("鮨 酒 肴 杉玉", "").strip() or n, "a": a.split(" ")[0]}
+    return list(rows.values())
+
+
+# ---------------------------------------------------------------------------
 # 登録一覧（code は優待手帳の銘柄マスタのコードと一致させる）
 # ---------------------------------------------------------------------------
 SOURCES = [
@@ -561,5 +577,11 @@ SOURCES = [
         "code": "3082", "name": "きちりホールディングス", "brands": ["いしがまやハンバーグ", "VEGEGO", "とん久"],
         "url": "https://kichiri.jp/search/",
         "fetch": kichiri,
+    },
+    {
+        "code": "3563", "name": "FOOD & LIFE COMPANIES", "brands": ["杉玉"],
+        "url": "https://www.sugidama-sushiizakaya.jp/shop/",
+        "note": "杉玉のみ収録（京樽は未収録）",
+        "fetch": sugidama,
     },
 ]
