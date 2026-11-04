@@ -1,5 +1,5 @@
 // 優待手帳 Service Worker
-const CACHE = "yutai-v13";
+const CACHE = "yutai-v14";
 const SHELL = [
   "./",
   "./index.html",

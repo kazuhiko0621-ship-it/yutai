@@ -255,6 +255,14 @@ input:disabled{background:#EEF1ED; color:#7B8781;}
 .map-search{display:flex; gap:6px; margin-bottom:8px;}
 .map-search input{flex:1; min-width:0; font-size:16px; padding:8px 12px;}
 .map-search .btn{flex-shrink:0;}
+.map-wrap{position:relative; margin-bottom:10px;}
+.map-wrap #storeMap{margin-bottom:0;}
+/* 地図の中心ガイド（「地図の中心から」近い店舗を出すときの基準） */
+.map-center{position:absolute; left:50%; top:50%; width:26px; height:26px; margin:-13px 0 0 -13px; z-index:450; pointer-events:none;}
+.map-center::before,.map-center::after{content:""; position:absolute; background:#1E2A30; box-shadow:0 0 0 2px rgba(255,255,255,.95); border-radius:1px;}
+.map-center::before{left:12px; top:0; width:2px; height:26px;}
+.map-center::after{top:12px; left:0; height:2px; width:26px;}
+.map-center.hide{display:none;}
 #storeMap{height:44vh; min-height:260px; border-radius:var(--radius); border:1px solid var(--line); margin-bottom:10px; z-index:1; background:#E8EEE9;}
 .st-item{
   background:var(--card); border:1px solid var(--line); border-radius:12px;
@@ -1327,11 +1335,12 @@ async function loadBaseStyle(){
   const font = symbols.map(l => l.layout?.["text-font"]).find(f => Array.isArray(f)) || ["Noto Sans Regular"];
   const src = st.layers.find(l => l["source-layer"] === "transportation")?.source || Object.keys(st.sources)[0];
   st.layers = st.layers.filter(l => l.type !== "symbol");
-  // 線路：transportation レイヤーのうち rail を含む線を濃く・太く
+  // 線路：transportation レイヤーのうち rail を含む線を濃く・太く（地下鉄と同じ縮尺から同じ太さで表示）
+  const railW = ["interpolate", ["linear"], ["zoom"], 10, 1.6, 13, 3, 16, 5];
   for(const l of st.layers){
     if(l.type === "line" && l["source-layer"] === "transportation" && /rail|transit/.test(JSON.stringify(l.filter || "") + l.id)){
-      l.paint = { ...l.paint, "line-color":"#7E8A93",
-        "line-width":["interpolate", ["linear"], ["zoom"], 9, 0.8, 13, 1.6, 16, 2.6] };
+      l.paint = { ...l.paint, "line-color":"#7E8A93", "line-width":railW };
+      delete l.minzoom;
       if(l.paint["line-dasharray"]) delete l.paint["line-dasharray"];
       if(l.layout?.visibility === "none") l.layout.visibility = "visible";
     }
@@ -1356,7 +1365,7 @@ async function loadBaseStyle(){
     const res = await fetch("./subway.geojson", { cache:"no-cache" });
     if(res.ok){
       st.sources["yutai-subway"] = { type:"geojson", data:await res.json() };
-      const lineW = ["interpolate", ["linear"], ["zoom"], 10, 1.6, 13, 3, 16, 5];
+      const lineW = railW;
       st.layers.push(
         { id:"yutai-subway-casing", type:"line", source:"yutai-subway", filter:["==", ["get", "kind"], "line"],
           layout:{ "line-cap":"round", "line-join":"round" },
@@ -1458,7 +1467,7 @@ async function renderMap(){
       ${shown.map(c => `<button class="fchip ${!mapState.hidden.has(c.code) ? "on" : ""}" data-code="${esc(c.code)}">
         <span style="color:${!mapState.hidden.has(c.code) ? "#fff" : color[c.code]}">●</span> ${esc(label(c))}</button>`).join("")}
     </div>
-    <div id="storeMap"></div>
+    <div class="map-wrap"><div id="storeMap"></div><div class="map-center" id="mcenter"></div></div>
     <div class="row-between" style="margin:0 2px 8px;">
       <h2 style="margin:0;">近い店舗</h2>
       <span class="sub" id="mbase"></span>
@@ -1516,7 +1525,8 @@ async function renderMap(){
   function renderNearList(){
     const c = storeMap.getCenter();
     const base = mapState.base || { lat:c.lat, lng:c.lng };
-    $("#mbase").textContent = mapState.base ? `${mapState.baseLabel || "指定地点"}から` : "地図の中心から";
+    $("#mbase").textContent = mapState.base ? `${mapState.baseLabel || "指定地点"}から` : "地図の中心（＋）から";
+    $("#mcenter").classList.toggle("hide", !!mapState.base);
     const near = stores.map(s => ({ s, d:distKm(base, s) })).sort((a, b) => a.d - b.d).slice(0, 10);
     $("#mlist").innerHTML = near.length ? near.map(({ s, d }) => {
       const code = normCode(s.c), comp = compOf[code] || {};
