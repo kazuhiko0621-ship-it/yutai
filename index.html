@@ -1292,20 +1292,36 @@ let leafletReady = null;
 let storeMap = null;
 const normCode = c => String(c ?? "").toUpperCase();
 
-function loadLeaflet(){
-  if(window.L) return Promise.resolve();
-  if(leafletReady) return leafletReady;
-  leafletReady = new Promise((res, rej) => {
-    const css = document.createElement("link");
-    css.rel = "stylesheet"; css.href = "https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css";
-    document.head.appendChild(css);
+function loadScript(src){
+  return new Promise((res, rej) => {
     const s = document.createElement("script");
-    s.src = "https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js";
-    s.onload = res;
-    s.onerror = () => { leafletReady = null; rej(new Error("地図ライブラリを読み込めませんでした。通信環境をご確認ください。")); };
+    s.src = src; s.onload = res; s.onerror = () => rej(new Error("地図ライブラリを読み込めませんでした。通信環境をご確認ください。"));
     document.head.appendChild(s);
   });
+}
+function loadCss(href){
+  const l = document.createElement("link"); l.rel = "stylesheet"; l.href = href; document.head.appendChild(l);
+}
+/* Leaflet（操作・マーカー）＋ MapLibre（ベクター地図の描画）を読み込む */
+function loadLeaflet(){
+  if(window.L && L.maplibreGL) return Promise.resolve();
+  if(leafletReady) return leafletReady;
+  loadCss("https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css");
+  loadCss("https://cdn.jsdelivr.net/npm/maplibre-gl@4.7.1/dist/maplibre-gl.css");
+  leafletReady = Promise.all([
+    loadScript("https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"),
+    loadScript("https://cdn.jsdelivr.net/npm/maplibre-gl@4.7.1/dist/maplibre-gl.js"),
+  ]).then(() => loadScript("https://cdn.jsdelivr.net/npm/@maplibre/maplibre-gl-leaflet@0.0.22/leaflet-maplibre-gl.js"))
+    .catch(e => { leafletReady = null; throw e; });
   return leafletReady;
+}
+/* 地図スタイル：OpenFreeMap の Positron から文字（地名・道路名など）のレイヤーを除いたもの */
+let baseStyle = null;
+async function loadBaseStyle(){
+  if(baseStyle) return baseStyle;
+  const st = await (await fetch("https://tiles.openfreemap.org/styles/positron")).json();
+  st.layers = st.layers.filter(l => l.type !== "symbol");
+  return baseStyle = st;
 }
 async function loadStores(){
   if(storeData) return storeData;
@@ -1362,6 +1378,7 @@ async function renderMap(){
   setFab(null);
   app.innerHTML = `<div class="empty">店舗データを読み込み中…</div>`;
   let data;
+  loadBaseStyle().catch(()=>{});
   try{ [data] = await Promise.all([loadStores(), loadLeaflet()]); }
   catch(e){ app.innerHTML = `<div class="err">${esc(e.message ?? e)}</div>`; return; }
   if(view.name !== "map") return;
@@ -1404,11 +1421,18 @@ async function renderMap(){
   const stores = data.stores.filter(s => !mapState.hidden.has(normCode(s.c)) && s.lat);
   if(storeMap){ storeMap.remove(); storeMap = null; }
   storeMap = L.map("storeMap", { preferCanvas:true, zoomControl:true });
-  // CARTO Positron（文字なし）：地名を出さないフラットな地図
-  L.tileLayer("https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}{r}.png", {
-    maxZoom:19, subdomains:"abcd",
-    attribution:'&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions" target="_blank" rel="noopener">CARTO</a>'
-  }).addTo(storeMap);
+  const osmAttr = '<a href="https://openfreemap.org" target="_blank" rel="noopener">OpenFreeMap</a> &copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>';
+  loadBaseStyle().then(style => {
+    if(!storeMap) return;
+    L.maplibreGL({ style, attribution:osmAttr, interactive:false }).addTo(storeMap);
+  }).catch(e => {
+    // 地図スタイルが取れない場合は国土地理院の淡色地図で代替（地名入り）
+    console.warn(e);
+    if(!storeMap) return;
+    L.tileLayer("https://cyberjapandata.gsi.go.jp/xyz/pale/{z}/{x}/{y}.png", {
+      maxZoom:18, attribution:'<a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank" rel="noopener">地理院タイル</a>'
+    }).addTo(storeMap);
+  });
   storeMap.setView(mapState.center || mapState.base || [35.17, 136.91], mapState.zoom || 12);
 
   const popup = s => {
