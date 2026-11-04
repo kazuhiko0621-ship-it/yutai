@@ -259,6 +259,56 @@ def bigecho():
 
 
 # ---------------------------------------------------------------------------
+# Yext の店舗ページ（一風堂など）：県ページ → 市ページ → 店舗ページの公開HTMLをたどる
+# ---------------------------------------------------------------------------
+def yext_pages(base, country="日本"):
+    import html as H
+    import json as J
+    import re
+    import urllib.parse as U
+
+    def links(path):
+        body = get(base + "/" + path, as_json=False)
+        return [x for x in re.findall(r'href="([^"]+)"', body) if x.startswith("../")]
+
+    def fetch():
+        pref_path = U.quote(country) + "/" + U.quote(PREF)
+        store_ids, seen_city = set(), set()
+        for href in links(pref_path):
+            tail = href.replace("../", "")
+            if re.fullmatch(r"\d+", tail):
+                store_ids.add(tail)
+            elif tail.startswith(country + "/" + PREF + "/") and tail not in seen_city:
+                seen_city.add(tail)
+                for h2 in links("/".join(U.quote(x) for x in tail.split("/"))):
+                    t2 = h2.replace("../", "")
+                    if re.fullmatch(r"\d+", t2):
+                        store_ids.add(t2)
+        rows = []
+        for sid in sorted(store_ids):
+            body = get(f"{base}/{sid}", as_json=False)
+            for ld in re.findall(r'<script type="application/ld\+json">(.*?)</script>', body, re.S):
+                try:
+                    j = J.loads(ld)
+                except ValueError:
+                    continue
+                for node in j.get("@graph", [j]):
+                    if node.get("@type") == "LocalBusiness" and node.get("address"):
+                        a = node["address"]
+                        geo = re.search(r'"latitude"\s*:\s*([\d.]+)\s*,\s*"longitude"\s*:\s*([\d.]+)', body)
+                        name = H.unescape(node["name"])
+                        rows.append({"id": sid, "b": name.split(" ")[0], "n": " ".join(name.split(" ")[1:]) or name,
+                                     "a": a.get("addressRegion", "") + a.get("addressLocality", "") + a.get("streetAddress", ""),
+                                     "lat": float(geo.group(1)) if geo else None, "lng": float(geo.group(2)) if geo else None})
+                        break
+                else:
+                    continue
+                break
+        return rows
+    return fetch
+
+
+# ---------------------------------------------------------------------------
 # 登録一覧（code は優待手帳の銘柄マスタのコードと一致させる）
 # ---------------------------------------------------------------------------
 SOURCES = [
@@ -317,5 +367,10 @@ SOURCES = [
         "code": "7458", "name": "第一興商", "brands": ["ビッグエコー"],
         "url": "https://shop.big-echo.jp/",
         "fetch": bigecho,
+    },
+    {
+        "code": "3561", "name": "力の源ホールディングス", "brands": ["一風堂"],
+        "url": "https://stores.ippudo.com/",
+        "fetch": yext_pages("https://stores.ippudo.com"),
     },
 ]
