@@ -44,4 +44,8 @@ jobs:
           git config user.email "41898+github-actions[bot]@users.noreply.github.com"
           git add stores.json stores_changes.md; [ -f subway.geojson ] && git add subway.geojson
           git commit -m "店舗データ更新 $(date +%Y-%m-%d)" -m "$(head -n 4 stores_changes.md | tail -n 2)"
-          git push
+          # 実行中に別のコミットが入っても失敗しないよう、最新を取り込んでからpush
+          for i in 1 2 3; do
+            git pull --rebase origin "${GITHUB_REF_NAME}" && git push && break
+            sleep 5
+          done
