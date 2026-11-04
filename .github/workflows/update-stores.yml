@@ -36,6 +36,8 @@ jobs:
       - name: 地下鉄路線を取得
         run: python3 scripts/stores/subway.py
       - name: 変更をコミット
+        # 作業ブランチでは収集結果の確認だけ行い、コミットはmainのみ（マージ時の衝突を防ぐ）
+        if: github.ref_name == github.event.repository.default_branch
         run: |
           if [ -z "$(git status --porcelain -- stores.json stores_changes.md subway.geojson)" ]; then
             echo "変更なし"; exit 0

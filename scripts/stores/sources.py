@@ -198,7 +198,8 @@ def bronco():
     rows = []
     for u in dict.fromkeys(urls):
         page = get(u, as_json=False)
-        name = re.search(r"<title>(.*?)[（(]", page)  # 例：「七宝店（愛知県あま市） ステーキ…」
+        # 店舗名：<title>「七宝店（愛知県あま市） ステーキ…」 → なければ <h1>
+        name = re.search(r"<title[^>]*>\s*([^<（(]+?)\s*[（(]", page, re.S) or re.search(r"<h1[^>]*>\s*([^<]+?)\s*<", page, re.S)
         addr = re.search(r'住所</div>\s*<div class="info_content_item_text">(.*?)</div>', page, re.S)
         ll = re.search(r"maps[^\"']*?(3[45]\.\d{3,})(?:,|%2C)\s*(13[67]\.\d{3,})", page)
         if not addr:
@@ -256,6 +257,56 @@ def bigecho():
                                   "n": p["name"].replace("カラオケ ビッグエコー", "").strip() or p["name"],
                                   "a": p["address"].strip(), "lat": p["latitude"], "lng": p["longitude"]}
     return list(rows.values())
+
+
+# ---------------------------------------------------------------------------
+# Yext の店舗ページ（一風堂など）：県ページ → 市ページ → 店舗ページの公開HTMLをたどる
+# ---------------------------------------------------------------------------
+def yext_pages(base, country="日本"):
+    import html as H
+    import json as J
+    import re
+    import urllib.parse as U
+
+    def links(path):
+        body = get(base + "/" + path, as_json=False)
+        return [x for x in re.findall(r'href="([^"]+)"', body) if x.startswith("../")]
+
+    def fetch():
+        pref_path = U.quote(country) + "/" + U.quote(PREF)
+        store_ids, seen_city = set(), set()
+        for href in links(pref_path):
+            tail = href.replace("../", "")
+            if re.fullmatch(r"\d+", tail):
+                store_ids.add(tail)
+            elif tail.startswith(country + "/" + PREF + "/") and tail not in seen_city:
+                seen_city.add(tail)
+                for h2 in links("/".join(U.quote(x) for x in tail.split("/"))):
+                    t2 = h2.replace("../", "")
+                    if re.fullmatch(r"\d+", t2):
+                        store_ids.add(t2)
+        rows = []
+        for sid in sorted(store_ids):
+            body = get(f"{base}/{sid}", as_json=False)
+            for ld in re.findall(r'<script type="application/ld\+json">(.*?)</script>', body, re.S):
+                try:
+                    j = J.loads(ld)
+                except ValueError:
+                    continue
+                for node in j.get("@graph", [j]):
+                    if node.get("@type") == "LocalBusiness" and node.get("address"):
+                        a = node["address"]
+                        geo = re.search(r'"latitude"\s*:\s*([\d.]+)\s*,\s*"longitude"\s*:\s*([\d.]+)', body)
+                        name = H.unescape(node["name"])
+                        rows.append({"id": sid, "b": name.split(" ")[0], "n": " ".join(name.split(" ")[1:]) or name,
+                                     "a": a.get("addressRegion", "") + a.get("addressLocality", "") + a.get("streetAddress", ""),
+                                     "lat": float(geo.group(1)) if geo else None, "lng": float(geo.group(2)) if geo else None})
+                        break
+                else:
+                    continue
+                break
+        return rows
+    return fetch
 
 
 # ---------------------------------------------------------------------------
@@ -317,5 +368,10 @@ SOURCES = [
         "code": "7458", "name": "第一興商", "brands": ["ビッグエコー"],
         "url": "https://shop.big-echo.jp/",
         "fetch": bigecho,
+    },
+    {
+        "code": "3561", "name": "力の源ホールディングス", "brands": ["一風堂"],
+        "url": "https://stores.ippudo.com/",
+        "fetch": yext_pages("https://stores.ippudo.com"),
     },
 ]
