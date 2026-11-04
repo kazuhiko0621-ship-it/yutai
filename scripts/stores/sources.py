@@ -119,6 +119,7 @@ def jgroup():
                 continue
             name = " ".join(x.strip() for x in re.split(r"<br\s*/?>", H.unescape(re.sub(r"<(?!br)[^>]+>", "", ttl.group(1)))) if x.strip())
             a = re.sub(r"\s+", "", H.unescape(re.sub(r"<[^>]+>", "", addr.group(1))))
+            a = re.sub(r"〒?\d{3}-\d{4}", "", a)
             if not re.match(r"^.{2,3}[都道府県]", a):
                 a = PREF + a  # 県名が省略されている住所（愛知県で絞り込み済み）
             rows.append({"id": m_id.group(1), "b": "", "n": name, "a": a})
