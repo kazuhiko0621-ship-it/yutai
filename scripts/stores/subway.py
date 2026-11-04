@@ -30,7 +30,7 @@ QUERY = f"""
   rel["route"="subway"];
   rel["route"="train"]["network"~"名古屋市営地下鉄|名古屋市交通局"];
 );
-out tags geom;
+out geom;
 node["railway"="station"]["station"="subway"];
 out body;
 """
