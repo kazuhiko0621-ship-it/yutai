@@ -118,7 +118,10 @@ def jgroup():
             if not (m_id and ttl and addr):
                 continue
             name = " ".join(x.strip() for x in re.split(r"<br\s*/?>", H.unescape(re.sub(r"<(?!br)[^>]+>", "", ttl.group(1)))) if x.strip())
-            rows.append({"id": m_id.group(1), "b": "", "n": name, "a": H.unescape(re.sub(r"<[^>]+>", "", addr.group(1))).strip()})
+            a = re.sub(r"\s+", "", H.unescape(re.sub(r"<[^>]+>", "", addr.group(1))))
+            if not re.match(r"^.{2,3}[都道府県]", a):
+                a = PREF + a  # 県名が省略されている住所（愛知県で絞り込み済み）
+            rows.append({"id": m_id.group(1), "b": "", "n": name, "a": a})
         if not arts or f"page/{page + 1}/" not in body:
             break
         page += 1
