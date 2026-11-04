@@ -241,6 +241,24 @@ def manekineko():
 
 
 # ---------------------------------------------------------------------------
+# 第一興商：ビッグエコー（地図範囲指定のAPI。マクドナルドと同じ方式）
+# ---------------------------------------------------------------------------
+def bigecho():
+    s, w, n, e = AICHI_BOUNDS
+    grid, rows = 3, {}
+    for i in range(grid):
+        for k in range(grid):
+            b = (s + (n - s) * i / grid, w + (e - w) * k / grid,
+                 s + (n - s) * (i + 1) / grid, w + (e - w) * (k + 1) / grid)
+            j = get("https://shop.big-echo.jp/api/point", {"b": ",".join(f"{v:.5f}" for v in b), "np": "{}"})
+            for p in j["items"]:
+                rows[p["key"]] = {"id": p["key"], "b": "ビッグエコー",
+                                  "n": p["name"].replace("カラオケ ビッグエコー", "").strip() or p["name"],
+                                  "a": p["address"].strip(), "lat": p["latitude"], "lng": p["longitude"]}
+    return list(rows.values())
+
+
+# ---------------------------------------------------------------------------
 # 登録一覧（code は優待手帳の銘柄マスタのコードと一致させる）
 # ---------------------------------------------------------------------------
 SOURCES = [
@@ -294,5 +312,10 @@ SOURCES = [
         "code": "2157", "name": "コシダカホールディングス", "brands": ["カラオケまねきねこ"],
         "url": "https://www.karaokemanekineko.jp/locations/",
         "fetch": manekineko,
+    },
+    {
+        "code": "7458", "name": "第一興商", "brands": ["ビッグエコー"],
+        "url": "https://shop.big-echo.jp/",
+        "fetch": bigecho,
     },
 ]
