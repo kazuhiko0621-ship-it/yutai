@@ -198,7 +198,8 @@ def bronco():
     rows = []
     for u in dict.fromkeys(urls):
         page = get(u, as_json=False)
-        name = re.search(r"<title>(.*?)[（(]", page)  # 例：「七宝店（愛知県あま市） ステーキ…」
+        # 店舗名：<title>「七宝店（愛知県あま市） ステーキ…」 → なければ <h1>
+        name = re.search(r"<title[^>]*>\s*([^<（(]+?)\s*[（(]", page, re.S) or re.search(r"<h1[^>]*>\s*([^<]+?)\s*<", page, re.S)
         addr = re.search(r'住所</div>\s*<div class="info_content_item_text">(.*?)</div>', page, re.S)
         ll = re.search(r"maps[^\"']*?(3[45]\.\d{3,})(?:,|%2C)\s*(13[67]\.\d{3,})", page)
         if not addr:
