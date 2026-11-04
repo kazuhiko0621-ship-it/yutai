@@ -1315,12 +1315,42 @@ function loadLeaflet(){
     .catch(e => { leafletReady = null; throw e; });
   return leafletReady;
 }
-/* 地図スタイル：OpenFreeMap の Positron から文字（地名・道路名など）のレイヤーを除いたもの */
+/* 地図スタイル：OpenFreeMap の Positron をもとに
+   ・文字（地名・道路名など）のレイヤーを除く
+   ・線路を濃くする
+   ・駅だけ印と駅名を描く（OpenMapTiles の poi レイヤー、class=railway） */
 let baseStyle = null;
 async function loadBaseStyle(){
   if(baseStyle) return baseStyle;
   const st = await (await fetch("https://tiles.openfreemap.org/styles/positron")).json();
+  const symbols = st.layers.filter(l => l.type === "symbol");
+  const font = symbols.map(l => l.layout?.["text-font"]).find(f => Array.isArray(f)) || ["Noto Sans Regular"];
+  const src = st.layers.find(l => l["source-layer"] === "transportation")?.source || Object.keys(st.sources)[0];
   st.layers = st.layers.filter(l => l.type !== "symbol");
+  // 線路：transportation レイヤーのうち rail を含む線を濃く・太く
+  for(const l of st.layers){
+    if(l.type === "line" && l["source-layer"] === "transportation" && /rail|transit/.test(JSON.stringify(l.filter || "") + l.id)){
+      l.paint = { ...l.paint, "line-color":"#7E8A93",
+        "line-width":["interpolate", ["linear"], ["zoom"], 9, 0.8, 13, 1.6, 16, 2.6] };
+      if(l.paint["line-dasharray"]) delete l.paint["line-dasharray"];
+      if(l.layout?.visibility === "none") l.layout.visibility = "visible";
+    }
+  }
+  const stationFilter = ["all", ["==", ["get", "class"], "railway"],
+    ["match", ["get", "subclass"], ["station", "halt"], true, false]];
+  st.layers.push({
+    id:"yutai-station-dot", type:"circle", source:src, "source-layer":"poi", minzoom:11, filter:stationFilter,
+    paint:{ "circle-radius":["interpolate", ["linear"], ["zoom"], 11, 2.5, 15, 4.5],
+      "circle-color":"#fff", "circle-stroke-color":"#4A565E", "circle-stroke-width":1.5 }
+  });
+  st.layers.push({
+    id:"yutai-station-name", type:"symbol", source:src, "source-layer":"poi", minzoom:11, filter:stationFilter,
+    layout:{ "text-field":["coalesce", ["get", "name:ja"], ["get", "name"]], "text-font":font,
+      "text-size":["interpolate", ["linear"], ["zoom"], 11, 10.5, 15, 13],
+      "text-offset":[0, 0.9], "text-anchor":"top", "text-max-width":8,
+      "symbol-sort-key":["coalesce", ["get", "rank"], 99] },
+    paint:{ "text-color":"#2F3A40", "text-halo-color":"rgba(255,255,255,.95)", "text-halo-width":1.6 }
+  });
   return baseStyle = st;
 }
 async function loadStores(){
