@@ -362,6 +362,34 @@ def create_restaurants():
 
 
 # ---------------------------------------------------------------------------
+# Canly の店舗検索サイト（ブランドごとのサイト）：/愛知県/ ページの埋め込みデータを読む
+# ---------------------------------------------------------------------------
+def canly_sites(sites):
+    """sites: [(サイトのURL, ブランド名), ...]"""
+    import json as J
+    import re
+    import urllib.parse as U
+
+    def fetch():
+        rows = []
+        for base, brand in sites:
+            page, maxp = 1, 1
+            while page <= maxp:
+                body = get(f"{base}/{U.quote(PREF)}/" + (f"?page={page}" if page > 1 else ""), as_json=False)
+                pp = J.loads(re.search(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', body, re.S).group(1))["props"]["pageProps"]
+                maxp = pp.get("maxPage") or 1
+                for x in pp.get("shops", []):
+                    name = x["nameKanji"]
+                    rows.append({"id": x["id"], "b": brand, "n": name.replace(brand, "").strip() or name,
+                                 "a": x.get("address", ""),
+                                 "lat": float(x["latitude"]) if x.get("latitude") else None,
+                                 "lng": float(x["longitude"]) if x.get("longitude") else None})
+                page += 1
+        return rows
+    return fetch
+
+
+# ---------------------------------------------------------------------------
 # 登録一覧（code は優待手帳の銘柄マスタのコードと一致させる）
 # ---------------------------------------------------------------------------
 SOURCES = [
@@ -437,5 +465,11 @@ SOURCES = [
         "url": "https://www.create-restaurants.co.jp/",
         "note": "公式の店舗データで「株主優待利用可」の店舗のみ",
         "fetch": create_restaurants,
+    },
+    {
+        "code": "9279", "name": "ギフトホールディングス", "brands": ["ラーメン豚山"],
+        "url": "https://shop.butayama.com/",
+        "note": "町田商店（設定で除外）以外はラーメン豚山のみ収録",
+        "fetch": canly_sites([("https://shop.butayama.com", "ラーメン豚山")]),
     },
 ]
