@@ -430,6 +430,35 @@ def hikari_food():
 
 
 # ---------------------------------------------------------------------------
+# きちり（店舗検索ページの一覧 → 各店舗ページの住所）
+# ---------------------------------------------------------------------------
+KICHIRI_BRANDS = ["ハンバーグ＆ステーキ いしがま工房", "いしがまやハンバーグ", "とんかつとん久", "とん久", "VEGEGO", "KICHIRI", "KI・CHI・RI"]
+
+
+def kichiri():
+    import html as H
+    import re
+    body = get("https://kichiri.jp/search/", as_json=False)
+    rows = []
+    for li in re.findall(r"<li>\s*<a href=\"(https://kichiri\.jp/[^\"]+)\">(.*?)</a>\s*</li>", body, re.S):
+        url, inner = li
+        pref = re.search(r'class="txt">\s*([^<]+?)\s*<', inner)
+        name = re.search(r'class="name">\s*([^<]+?)\s*<', inner)
+        if not (pref and name and pref.group(1) == PREF):
+            continue
+        n = re.sub(r"\s+", " ", H.unescape(name.group(1))).strip()
+        page = get(url, as_json=False)
+        text = re.sub(r"<script.*?</script>|<style.*?</style>", "", page, flags=re.S)
+        text = re.sub(r"<[^>]+>", " ", text)
+        addr = re.search(r"(%s[^\s　]+)" % PREF, H.unescape(text))
+        if not addr:
+            continue
+        brand = next((b for b in KICHIRI_BRANDS if n.startswith(b)), n.split(" ")[0])
+        rows.append({"id": url.rstrip("/").split("/", 3)[-1], "b": brand, "n": n[len(brand):].strip() or n, "a": addr.group(1)})
+    return rows
+
+
+# ---------------------------------------------------------------------------
 # 登録一覧（code は優待手帳の銘柄マスタのコードと一致させる）
 # ---------------------------------------------------------------------------
 SOURCES = [
@@ -527,5 +556,10 @@ SOURCES = [
         "code": "3547", "name": "ユニシアホールディングス", "brands": ["串カツ田中"],
         "url": "https://restaurant.kushi-tanaka.com/",
         "fetch": canly_sites([("https://restaurant.kushi-tanaka.com", "串カツ田中")]),
+    },
+    {
+        "code": "3082", "name": "きちりホールディングス", "brands": ["いしがまやハンバーグ", "VEGEGO", "とん久"],
+        "url": "https://kichiri.jp/search/",
+        "fetch": kichiri,
     },
 ]
