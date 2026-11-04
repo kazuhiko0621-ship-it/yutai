@@ -184,6 +184,81 @@ def monogatari():
 
 
 # ---------------------------------------------------------------------------
+# ブロンコビリー（店舗一覧ページ → 各店舗ページの住所・地図座標）
+# ---------------------------------------------------------------------------
+def bronco():
+    import html as H
+    import re
+    top = get("https://www.bronco.co.jp/shop/", as_json=False)
+    urls = []
+    for area in ("nagoya", "aichi"):
+        m = re.search(r'<li class="shop_contents_list_item[^"]*" data-id="%s">(.*?)</ul>' % area, top, re.S)
+        if m:
+            urls += re.findall(r'href="(https://www\.bronco\.co\.jp/shop/[^"]+)"', m.group(1))
+    rows = []
+    for u in dict.fromkeys(urls):
+        page = get(u, as_json=False)
+        name = re.search(r'<a class="shop_list_item_anchor" href="%s">(.*?)</a>' % re.escape(u), top)
+        addr = re.search(r'住所</div>\s*<div class="info_content_item_text">(.*?)</div>', page, re.S)
+        ll = re.search(r"maps[^\"']*?(3[45]\.\d{3,})(?:,|%2C)\s*(13[67]\.\d{3,})", page)
+        if not addr:
+            continue
+        rows.append({"id": u.rstrip("/").split("/")[-1], "b": "ブロンコビリー",
+                     "n": H.unescape(name.group(1)).strip() if name else u.rstrip("/").split("/")[-1],
+                     "a": re.sub(r"\s+", "", H.unescape(re.sub(r"<[^>]+>", "", addr.group(1)))),
+                     "lat": float(ll.group(1)) if ll else None, "lng": float(ll.group(2)) if ll else None})
+    return rows
+
+
+# ---------------------------------------------------------------------------
+# コシダカ：カラオケまねきねこ（WordPressの「もっと見る」と同じ呼び出しで県内全件を取得）
+# ---------------------------------------------------------------------------
+def manekineko():
+    import html as H
+    import json as J
+    import re
+    import urllib.parse
+    import urllib.request
+    from common import UA
+    page = get("https://www.karaokemanekineko.jp/locations/aichi/", as_json=False)
+    cfg = J.loads(re.search(r"LOC_AJAX\s*=\s*(\{[^;]+\})", page).group(1))
+    data = urllib.parse.urlencode({"action": "loc_load_more", "nonce": cfg["nonce"], "pref": "aichi", "city": "",
+                                   "q": "", "mode": "", "lat": "", "lng": "", "page": 1, "per_page": 200}).encode()
+    req = urllib.request.Request(cfg["ajax_url"], data=data, headers={"User-Agent": UA})
+    with urllib.request.urlopen(req, timeout=30) as r:
+        j = J.loads(r.read().decode("utf-8"))
+    body = j["data"]["html"]
+    rows = []
+    for unit in re.findall(r'<div class="content__unit js-store".*?(?=<div class="content__unit js-store"|$)', body, re.S):
+        br = re.search(r'content__unit-ttl__branch">(.*?)<', unit, re.S)
+        ad = re.search(r'content__unit-address">(.*?)<', unit, re.S)
+        href = re.search(r'href="([^"]*/locations/aichi/[^"]+)"', unit)
+        if br and ad:
+            rows.append({"id": (href.group(1) if href else br.group(1)).rstrip("/").split("/")[-1],
+                         "b": "カラオケまねきねこ", "n": H.unescape(br.group(1)).strip(),
+                         "a": re.sub(r"\s+", "", H.unescape(ad.group(1)))})
+    return rows
+
+
+# ---------------------------------------------------------------------------
+# 第一興商：ビッグエコー（地図範囲指定のAPI。マクドナルドと同じ方式）
+# ---------------------------------------------------------------------------
+def bigecho():
+    s, w, n, e = AICHI_BOUNDS
+    grid, rows = 3, {}
+    for i in range(grid):
+        for k in range(grid):
+            b = (s + (n - s) * i / grid, w + (e - w) * k / grid,
+                 s + (n - s) * (i + 1) / grid, w + (e - w) * (k + 1) / grid)
+            j = get("https://shop.big-echo.jp/api/point", {"b": ",".join(f"{v:.5f}" for v in b), "np": "{}"})
+            for p in j["items"]:
+                rows[p["key"]] = {"id": p["key"], "b": "ビッグエコー",
+                                  "n": p["name"].replace("カラオケ ビッグエコー", "").strip() or p["name"],
+                                  "a": p["address"].strip(), "lat": p["latitude"], "lng": p["longitude"]}
+    return list(rows.values())
+
+
+# ---------------------------------------------------------------------------
 # 登録一覧（code は優待手帳の銘柄マスタのコードと一致させる）
 # ---------------------------------------------------------------------------
 SOURCES = [
@@ -227,5 +302,20 @@ SOURCES = [
         "code": "3097", "name": "物語コーポレーション", "brands": ["焼肉きんぐ", "丸源ラーメン", "ゆず庵", "焼きたてのかるび", "お好み焼本舗"],
         "url": "https://www.monogatari.co.jp/brand/search/",
         "fetch": monogatari,
+    },
+    {
+        "code": "3091", "name": "ブロンコビリー", "brands": ["ブロンコビリー"],
+        "url": "https://www.bronco.co.jp/shop/",
+        "fetch": bronco,
+    },
+    {
+        "code": "2157", "name": "コシダカホールディングス", "brands": ["カラオケまねきねこ"],
+        "url": "https://www.karaokemanekineko.jp/locations/",
+        "fetch": manekineko,
+    },
+    {
+        "code": "7458", "name": "第一興商", "brands": ["ビッグエコー"],
+        "url": "https://shop.big-echo.jp/",
+        "fetch": bigecho,
     },
 ]
