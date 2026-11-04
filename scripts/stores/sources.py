@@ -407,6 +407,29 @@ def hotland():
 
 
 # ---------------------------------------------------------------------------
+# 光フードサービス（店舗検索ページのHTML。優待が使える「大黒」「大国」「魚椿」の店舗のみ）
+# ---------------------------------------------------------------------------
+def hikari_food():
+    import html as H
+    import re
+    body = get("https://shop.hikari-food-service.jp/stores", {"prefecture": PREF_CODE}, as_json=False)
+    rows = []
+    for sec in re.findall(r'<section class="_stores__item[^"]*">(.*?)</section>', body, re.S):
+        name = re.search(r"<h2[^>]*>(.*?)</h2>", sec, re.S)
+        addr = re.search(r'<p class="_stores__address[^"]*">(.*?)</p>', sec, re.S)
+        sid = re.search(r'href="/stores/(\d+)"', sec)
+        if not (name and addr and sid):
+            continue
+        n = re.sub(r"\s+", " ", H.unescape(re.sub(r"<[^>]+>", "", name.group(1)))).strip()
+        a = re.sub(r"\s+", "", H.unescape(re.sub(r"<[^>]+>", "", addr.group(1))))
+        a = re.sub(r"〒?\d{3}-\d{4}", "", a)
+        brand = next((b for b in ("大黒", "大国", "魚椿") if b in n), None)
+        if brand and a.startswith(PREF):
+            rows.append({"id": sid.group(1), "b": brand, "n": n, "a": a})
+    return rows
+
+
+# ---------------------------------------------------------------------------
 # 登録一覧（code は優待手帳の銘柄マスタのコードと一致させる）
 # ---------------------------------------------------------------------------
 SOURCES = [
@@ -493,5 +516,11 @@ SOURCES = [
         "code": "3196", "name": "ホットランドホールディングス", "brands": ["築地銀だこハイボール酒場", "昇家", "李昇", "銀のあん"],
         "url": "https://hotland.co.jp/store/",
         "fetch": hotland,
+    },
+    {
+        "code": "138A", "name": "光フードサービス", "brands": ["大黒", "魚椿", "大国"],
+        "url": "https://shop.hikari-food-service.jp/stores",
+        "note": "優待が使える大黒・大国・魚椿のみ（金山家・焼肉デラックスは対象外）",
+        "fetch": hikari_food,
     },
 ]
