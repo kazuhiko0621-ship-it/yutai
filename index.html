@@ -1567,7 +1567,7 @@ async function renderMap(){
   const popup = s => {
     const c = compOf[normCode(s.c)] || {};
     return `<div class="pp-name">${esc(s.n)}</div>
-      <div>${esc(s.b || "")}・${esc(c.name || s.c)}</div>
+      <div>${s.b ? esc(s.b) + "・" : ""}${esc(c.name || s.c)}</div>
       <div class="sub">${esc(s.a)}</div>
       <div class="st-bal ${balanceOf(normCode(s.c)) ? "" : "none"}">${esc(balanceText(normCode(s.c)))}</div>
       ${s.x ? `<div class="st-note">${esc(s.x)}</div>` : ""}
@@ -1601,7 +1601,7 @@ async function renderMap(){
         <span class="st-dot" style="background:${color[code]}"></span>
         <div class="st-main">
           <div class="st-name">${esc(s.n)}</div>
-          <div class="st-meta">${esc(s.b || "")}・${esc(comp.name || code)}</div>
+          <div class="st-meta">${s.b ? esc(s.b) + "・" : ""}${esc(comp.name || code)}</div>
           <div class="st-bal ${has ? "" : "none"}">${esc(balanceText(code))}${s.x ? ` <span class="st-note">${esc(s.x)}</span>` : ""}</div>
         </div>
         <div class="st-dist">${fmtDist(d)}

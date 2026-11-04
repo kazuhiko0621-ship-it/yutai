@@ -88,6 +88,98 @@ def mcdonalds():
 
 
 # ---------------------------------------------------------------------------
+# Canly（店舗ページCMS。あみやき亭グループなどが利用）: 全国分が1リクエストで返る
+# ---------------------------------------------------------------------------
+def canly(directory_id):
+    def fetch():
+        j = get(f"https://api.site.can-ly.com/v2/directories/{directory_id}/shops/search", {"sort": "area:asc"})
+        return [{"id": s["id"], "b": (s.get("brand") or {}).get("name", ""), "n": s["nameKanji"],
+                 "a": s.get("address", ""), "lat": float(s["latitude"]) if s.get("latitude") else None,
+                 "lng": float(s["longitude"]) if s.get("longitude") else None}
+                for s in j["shops"]]
+    return fetch
+
+
+# ---------------------------------------------------------------------------
+# ジェイグループ（自社サイト。「株主優待券使用可」で絞り込んだ一覧をページ送りで取得）
+# ---------------------------------------------------------------------------
+def jgroup():
+    import html as H
+    import re
+    rows, page = [], 1
+    while True:
+        base = "https://www.jgroup.jp/brand/" + (f"page/{page}/" if page > 1 else "")
+        body = get(base, {"store_area_term[]": "27", "store_service[]": "株主優待券使用可"}, as_json=False)
+        arts = re.findall(r'<article class="c-card_brand.*?</article>', body, re.S)
+        for art in arts:
+            m_id = re.search(r'/brand/(\d+)/', art)
+            ttl = re.search(r'<h2 class="c-card_brand_ttl">(.*?)</h2>', art, re.S)
+            addr = re.search(r'<div class="c-card_brand_txt">.*?<p>(.*?)<br', art, re.S)
+            if not (m_id and ttl and addr):
+                continue
+            name = " ".join(x.strip() for x in re.split(r"<br\s*/?>", H.unescape(re.sub(r"<(?!br)[^>]+>", "", ttl.group(1)))) if x.strip())
+            rows.append({"id": m_id.group(1), "b": "", "n": name, "a": H.unescape(re.sub(r"<[^>]+>", "", addr.group(1))).strip()})
+        if not arts or f"page/{page + 1}/" not in body:
+            break
+        page += 1
+    return rows
+
+
+# ---------------------------------------------------------------------------
+# フジオフード（自社サイトの都道府県別一覧）
+# ---------------------------------------------------------------------------
+FUJIO_BRANDS = ["まいどおおきに食堂", "さち福や", "串家物語", "つるまる", "かっぽうぎ", "天麩羅 えびのや", "ピノキオ",
+                "デリス タルト＆カフェ", "フジオ軒", "うちの食堂", "かつ満", "ハニーミツバチ珈琲", "はらドーナッツ",
+                "土山人", "SAM'S", "天鳳"]
+
+
+def fujio():
+    import html as H
+    import re
+    body = get("https://www.fujiofood.com/shop_search/index.php", {"prefName": "愛知", "brandName": ""}, as_json=False)
+    rows = []
+    for li in re.findall(r'<li class="prefSec-store">(.*?)</li>', body, re.S):
+        ttl = re.search(r'<p class="ttl">(.*?)</p>', li, re.S)
+        addr = re.search(r"<th>住所</th>\s*<td>(.*?)<span", li, re.S)
+        sid = re.search(r"shop_(\d+)\.php", li)
+        if not (ttl and addr and sid):
+            continue
+        name = re.sub(r"[\s　]+", " ", H.unescape(ttl.group(1))).strip()
+        a = re.sub(r"<[^>]+>", " ", H.unescape(addr.group(1)))
+        a = re.sub(r"〒\d{3}-\d{4}", "", a)
+        a = re.sub(r"\s+", "", a)
+        if not a.startswith(PREF):
+            a = PREF + a
+        brand = next((b for b in FUJIO_BRANDS if name.startswith(b)), name.split(" ")[0])
+        rows.append({"id": sid.group(1), "b": brand, "n": name[len(brand):].strip() or name, "a": a})
+    return rows
+
+
+# ---------------------------------------------------------------------------
+# 物語コーポレーション（自社API。全国分をページ送りで取得し、県で絞る）
+# ---------------------------------------------------------------------------
+MONOGATARI_BRANDS = {1: "焼肉きんぐ", 2: "丸源ラーメン", 3: "お好み焼本舗", 4: "ゆず庵", 5: "きゃべとん",
+                     6: "牛たん大好き焼肉はっぴぃ", 7: "焼きたてのかるび", 8: "NIKUGEN", 9: "しゃぶとかに源氏",
+                     10: "果実屋珈琲", 11: "濃厚中華そば餃子 丸福", 12: "二代目丸源", 13: "熟成肉とんかつロース堂",
+                     14: "魚貝三昧げん屋", 15: "町中華 丸福飯店", 16: "肉讃岐 もっちりうどん源次郎"}
+
+
+def monogatari():
+    api = "https://shop.monogatari.co.jp/api/v1/shops/"
+    rows, page, last = [], 1, 1
+    while page <= last:
+        j = get(api, {"page": page})
+        last = j.get("last_page", 1)
+        for s in j["data"]:
+            if s.get("prefecture_id") != int(PREF_CODE) or s.get("not_public_flag"):
+                continue
+            rows.append({"id": s["shop_code"], "b": MONOGATARI_BRANDS.get(s["brand_id"], f"ブランド{s['brand_id']}"),
+                         "n": s["name"], "a": s.get("address", ""), "lat": s.get("latitude"), "lng": s.get("longitude")})
+        page += 1
+    return rows
+
+
+# ---------------------------------------------------------------------------
 # 登録一覧（code は優待手帳の銘柄マスタのコードと一致させる）
 # ---------------------------------------------------------------------------
 SOURCES = [
@@ -110,5 +202,26 @@ SOURCES = [
         "url": "https://map.mcdonalds.co.jp/",
         "note": "一部の店舗（球場・空港内など）では利用できない場合があります",
         "fetch": mcdonalds,
+    },
+    {
+        "code": "2753", "name": "あみやき亭", "brands": ["あみやき亭", "あみやき亭Plus", "美濃路", "みの路", "感動の肉と米", "ほるたん屋", "しゃぶ亭 ふふふ"],
+        "url": "https://shop.amiyakitei.co.jp/all/",
+        "fetch": canly(136),
+    },
+    {
+        "code": "3063", "name": "ジェイグループホールディングス", "brands": ["ジェイグループの各店"],
+        "url": "https://www.jgroup.jp/brand/",
+        "note": "公式サイトで「株主優待券使用可」の店舗のみ",
+        "fetch": jgroup,
+    },
+    {
+        "code": "2752", "name": "フジオフードグループ本社", "brands": ["まいどおおきに食堂", "串家物語", "さち福や", "うちの食堂"],
+        "url": "https://www.fujiofood.com/shop_search/",
+        "fetch": fujio,
+    },
+    {
+        "code": "3097", "name": "物語コーポレーション", "brands": ["焼肉きんぐ", "丸源ラーメン", "ゆず庵", "焼きたてのかるび", "お好み焼本舗"],
+        "url": "https://www.monogatari.co.jp/brand/search/",
+        "fetch": monogatari,
     },
 ]
