@@ -310,6 +310,35 @@ def yext_pages(base, country="日本"):
 
 
 # ---------------------------------------------------------------------------
+# トリドール（グループ店舗検索の検索結果JSON。県内の2地点から半径検索して重複を除く）
+# ---------------------------------------------------------------------------
+TORIDOLL_BRANDS = {"Marugame Seimen": "丸亀製麺", "Zundo-ya": "ずんどう屋", "Konas Coffee": "コナズ珈琲",
+                   "Niku no Yama Gyu": "肉のヤマ牛"}
+
+
+def toridoll():
+    rows = {}
+    for q in ("愛知県", "豊橋市"):
+        offset, count = 0, 1
+        while offset < count:
+            j = get("https://stores.toridoll.com/searchapi", {"q": q, "r": 100, "per": 50, "offset": offset, "l": "ja"},
+                    headers={"Accept": "application/json"})["response"]
+            count = j["count"]
+            for e in j["entities"]:
+                p = e["profile"]
+                if p.get("address", {}).get("region") != PREF:
+                    continue
+                a = p["address"]
+                c = p.get("yextDisplayCoordinate") or p.get("displayCoordinate") or {}
+                brand = TORIDOLL_BRANDS.get(p.get("c_cp_BrandName"), p.get("c_cp_BrandName") or "")
+                rows[p["meta"]["id"]] = {"id": p["meta"]["id"], "b": brand, "n": p.get("geomodifier") or p["name"],
+                                         "a": PREF + (a.get("city") or "") + (a.get("sublocality") or "") + (a.get("line1") or ""),
+                                         "lat": c.get("lat"), "lng": c.get("long")}
+            offset += 50
+    return list(rows.values())
+
+
+# ---------------------------------------------------------------------------
 # 登録一覧（code は優待手帳の銘柄マスタのコードと一致させる）
 # ---------------------------------------------------------------------------
 SOURCES = [
@@ -373,5 +402,11 @@ SOURCES = [
         "code": "3561", "name": "力の源ホールディングス", "brands": ["一風堂"],
         "url": "https://stores.ippudo.com/",
         "fetch": yext_pages("https://stores.ippudo.com"),
+    },
+    {
+        "code": "3397", "name": "トリドールホールディングス", "brands": ["丸亀製麺", "ずんどう屋", "コナズ珈琲"],
+        "url": "https://stores.toridoll.com/search",
+        "note": "券売機を使う一部店舗では利用不可（愛知県内は該当なし）",
+        "fetch": toridoll,
     },
 ]
