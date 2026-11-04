@@ -390,6 +390,23 @@ def canly_sites(sites):
 
 
 # ---------------------------------------------------------------------------
+# ホットランド（グループ店舗検索のAPI。座標が不正確なため住所から位置を求める）
+# ---------------------------------------------------------------------------
+def hotland():
+    rows, page, total = [], 1, 1
+    while page <= total:
+        j = get("https://search.hotland.co.jp/api/search",
+                {"limit": 100, "web_gyotai_id": "", "sub_gyotai_id": "", "prefecture_id": PREF_CODE,
+                 "country_id": "", "keyword": "", "page": page})
+        total = j.get("total_page") or 1
+        for x in j["result"]:
+            rows.append({"id": x["id"], "b": x.get("brand_name", ""), "n": x.get("shop_name", ""),
+                         "a": (x.get("address") or "").replace(" ", "").replace("　", "")})
+        page += 1
+    return rows
+
+
+# ---------------------------------------------------------------------------
 # 登録一覧（code は優待手帳の銘柄マスタのコードと一致させる）
 # ---------------------------------------------------------------------------
 SOURCES = [
@@ -471,5 +488,10 @@ SOURCES = [
         "url": "https://shop.butayama.com/",
         "note": "町田商店（設定で除外）以外はラーメン豚山のみ収録",
         "fetch": canly_sites([("https://shop.butayama.com", "ラーメン豚山")]),
+    },
+    {
+        "code": "3196", "name": "ホットランドホールディングス", "brands": ["築地銀だこハイボール酒場", "昇家", "李昇", "銀のあん"],
+        "url": "https://hotland.co.jp/store/",
+        "fetch": hotland,
     },
 ]
