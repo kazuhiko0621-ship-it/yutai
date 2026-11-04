@@ -523,4 +523,9 @@ SOURCES = [
         "note": "優待が使える大黒・大国・魚椿のみ（金山家・焼肉デラックスは対象外）",
         "fetch": hikari_food,
     },
+    {
+        "code": "3547", "name": "ユニシアホールディングス", "brands": ["串カツ田中"],
+        "url": "https://restaurant.kushi-tanaka.com/",
+        "fetch": canly_sites([("https://restaurant.kushi-tanaka.com", "串カツ田中")]),
+    },
 ]
