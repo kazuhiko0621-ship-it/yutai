@@ -339,6 +339,29 @@ def toridoll():
 
 
 # ---------------------------------------------------------------------------
+# クリエイト・レストランツ（レストランサーチのページに埋め込まれた全店舗データ。
+# 「shareholder」が available の店舗だけを優待対象として収録）
+# ---------------------------------------------------------------------------
+def create_restaurants():
+    import json as J
+    import re
+    page = get("https://www.create-restaurants.co.jp/", as_json=False)
+    i = page.index("'rest_api_country_5':") + len("'rest_api_country_5':")
+    shops, _ = J.JSONDecoder().raw_decode(page[i:])
+    rows = []
+    for x in shops:
+        if x.get("pref_name") != PREF or x.get("shareholder") != "available" or str(x.get("status")) != "1":
+            continue
+        name = re.sub(r"[ 　]+", " ", x["name_jp"]).strip()
+        brand = name.split(" ")[0]
+        rows.append({"id": x["store_id"], "b": brand, "n": name[len(brand):].strip() or name,
+                     "a": PREF + x.get("address1_jp", "") + re.sub(r"[ 　].*$", "", x.get("address2_jp", "")),
+                     "lat": float(x["latitude"]) if x.get("latitude") else None,
+                     "lng": float(x["longitude"]) if x.get("longitude") else None})
+    return rows
+
+
+# ---------------------------------------------------------------------------
 # 登録一覧（code は優待手帳の銘柄マスタのコードと一致させる）
 # ---------------------------------------------------------------------------
 SOURCES = [
@@ -408,5 +431,11 @@ SOURCES = [
         "url": "https://stores.toridoll.com/search",
         "note": "券売機を使う一部店舗では利用不可（愛知県内は該当なし）",
         "fetch": toridoll,
+    },
+    {
+        "code": "3387", "name": "クリエイト・レストランツ・ホールディングス", "brands": ["磯丸水産", "しゃぶ菜", "菜菜麻辣湯"],
+        "url": "https://www.create-restaurants.co.jp/",
+        "note": "公式の店舗データで「株主優待利用可」の店舗のみ",
+        "fetch": create_restaurants,
     },
 ]
