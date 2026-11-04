@@ -38,3 +38,19 @@ def geocode(address):
         return None
     lon, lat = res[0]["geometry"]["coordinates"]
     return round(lat, 6), round(lon, 6)
+
+
+def load_scopes(index_html):
+    """優待手帳の Supabase から店舗マップの取得範囲（yutai_store_scope）を読む。
+    接続先は index.html に書かれた URL・公開キーを使う。読めなければ空（＝全て扱い）。"""
+    import re
+    try:
+        html = index_html.read_text(encoding="utf-8")
+        url = re.search(r'SUPABASE_URL\s*=\s*"([^"]+)"', html).group(1)
+        key = re.search(r'SUPABASE_ANON_KEY\s*=\s*"([^"]+)"', html).group(1)
+        rows = get(f"{url}/rest/v1/yutai_store_scope", {"select": "code,scope,exclude_brands"},
+                   headers={"apikey": key, "Authorization": f"Bearer {key}"})
+        return {str(r["code"]).upper(): r for r in rows}
+    except Exception as e:  # noqa: BLE001
+        print(f"[warn] 取得範囲を読めませんでした（全て扱い）: {e}")
+        return {}

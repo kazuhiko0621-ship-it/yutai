@@ -18,7 +18,7 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from common import geocode  # noqa: E402
+from common import geocode, load_scopes  # noqa: E402
 from sources import SOURCES, PREF  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -45,10 +45,18 @@ def main(only):
         prev_by_code.setdefault(s["c"], []).append(s)
     prev_geo = {store_key(s): (s["lat"], s["lng"]) for s in prev.get("stores", []) if s.get("lat")}
 
+    scopes = load_scopes(ROOT / "index.html")
+    print(f"[info] 取得範囲: {len(scopes)}銘柄分をSupabaseから読込")
     companies, stores, problems = {}, [], []
     for src in SOURCES:
         code = src["code"]
         old = prev_by_code.get(code, [])
+        sc = scopes.get(code.upper(), {"scope": "all", "exclude_brands": []})
+        if sc["scope"] == "none":
+            companies[code] = {k: src[k] for k in ("name", "brands", "url", "note") if k in src} | {"scope": "none", "count": 0}
+            print(f"[skip] {code} {src['name']}: 取得範囲「なし」")
+            continue
+        excluded = set(sc.get("exclude_brands") or []) if sc["scope"] == "some" else set()
         if only and code not in only:
             stores.extend(old)
             if code in prev.get("companies", {}):
@@ -61,8 +69,17 @@ def main(only):
             got = [s for s in got if s.get("a", "").startswith(PREF)]
             if not got:
                 raise RuntimeError("0件でした")
-            if old and len(got) < len(old) * SHRINK_LIMIT:
-                raise RuntimeError(f"件数が急減（{len(old)}→{len(got)}）")
+            prev_total = prev.get("companies", {}).get(code, {}).get("total")
+            if prev_total and len(got) < prev_total * SHRINK_LIMIT:
+                raise RuntimeError(f"件数が急減（{prev_total}→{len(got)}）")
+            # ブランドの一覧（銘柄マスタ画面の選択肢）は除外前の全件から作る
+            brand_counts = {}
+            for s in got:
+                brand_counts[s.get("b", "")] = brand_counts.get(s.get("b", ""), 0) + 1
+            info["total"] = len(got)
+            info["brand_counts"] = dict(sorted(brand_counts.items(), key=lambda kv: -kv[1]))
+            info["scope"] = sc["scope"]
+            got = [s for s in got if s.get("b", "") not in excluded]
             seen = set()
             for s in got:
                 s["c"] = code
