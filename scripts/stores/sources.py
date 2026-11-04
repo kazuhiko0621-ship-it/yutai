@@ -310,6 +310,171 @@ def yext_pages(base, country="日本"):
 
 
 # ---------------------------------------------------------------------------
+# トリドール（グループ店舗検索の検索結果JSON。県内の2地点から半径検索して重複を除く）
+# ---------------------------------------------------------------------------
+TORIDOLL_BRANDS = {"Marugame Seimen": "丸亀製麺", "Zundo-ya": "ずんどう屋", "Konas Coffee": "コナズ珈琲",
+                   "Niku no Yama Gyu": "肉のヤマ牛"}
+
+
+def toridoll():
+    rows = {}
+    for q in ("愛知県", "豊橋市"):
+        offset, count = 0, 1
+        while offset < count:
+            j = get("https://stores.toridoll.com/searchapi", {"q": q, "r": 100, "per": 50, "offset": offset, "l": "ja"},
+                    headers={"Accept": "application/json"})["response"]
+            count = j["count"]
+            for e in j["entities"]:
+                p = e["profile"]
+                if p.get("address", {}).get("region") != PREF:
+                    continue
+                a = p["address"]
+                c = p.get("yextDisplayCoordinate") or p.get("displayCoordinate") or {}
+                brand = TORIDOLL_BRANDS.get(p.get("c_cp_BrandName"), p.get("c_cp_BrandName") or "")
+                rows[p["meta"]["id"]] = {"id": p["meta"]["id"], "b": brand, "n": p.get("geomodifier") or p["name"],
+                                         "a": PREF + (a.get("city") or "") + (a.get("sublocality") or "") + (a.get("line1") or ""),
+                                         "lat": c.get("lat"), "lng": c.get("long")}
+            offset += 50
+    return list(rows.values())
+
+
+# ---------------------------------------------------------------------------
+# クリエイト・レストランツ（レストランサーチのページに埋め込まれた全店舗データ。
+# 「shareholder」が available の店舗だけを優待対象として収録）
+# ---------------------------------------------------------------------------
+def create_restaurants():
+    import json as J
+    import re
+    page = get("https://www.create-restaurants.co.jp/", as_json=False)
+    i = page.index("'rest_api_country_5':") + len("'rest_api_country_5':")
+    shops, _ = J.JSONDecoder().raw_decode(page[i:])
+    rows = []
+    for x in shops:
+        if x.get("pref_name") != PREF or x.get("shareholder") != "available" or str(x.get("status")) != "1":
+            continue
+        name = re.sub(r"[ 　]+", " ", x["name_jp"]).strip()
+        brand = name.split(" ")[0]
+        rows.append({"id": x["store_id"], "b": brand, "n": name[len(brand):].strip() or name,
+                     "a": PREF + x.get("address1_jp", "") + re.sub(r"[ 　].*$", "", x.get("address2_jp", "")),
+                     "lat": float(x["latitude"]) if x.get("latitude") else None,
+                     "lng": float(x["longitude"]) if x.get("longitude") else None})
+    return rows
+
+
+# ---------------------------------------------------------------------------
+# Canly の店舗検索サイト（ブランドごとのサイト）：/愛知県/ ページの埋め込みデータを読む
+# ---------------------------------------------------------------------------
+def canly_sites(sites):
+    """sites: [(サイトのURL, ブランド名), ...]"""
+    import json as J
+    import re
+    import urllib.parse as U
+
+    def fetch():
+        rows = []
+        for base, brand in sites:
+            page, maxp = 1, 1
+            while page <= maxp:
+                body = get(f"{base}/{U.quote(PREF)}/" + (f"?page={page}" if page > 1 else ""), as_json=False)
+                pp = J.loads(re.search(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', body, re.S).group(1))["props"]["pageProps"]
+                maxp = pp.get("maxPage") or 1
+                for x in pp.get("shops", []):
+                    name = x["nameKanji"]
+                    rows.append({"id": x["id"], "b": brand, "n": name.replace(brand, "").strip() or name,
+                                 "a": x.get("address", ""),
+                                 "lat": float(x["latitude"]) if x.get("latitude") else None,
+                                 "lng": float(x["longitude"]) if x.get("longitude") else None})
+                page += 1
+        return rows
+    return fetch
+
+
+# ---------------------------------------------------------------------------
+# ホットランド（グループ店舗検索のAPI。座標が不正確なため住所から位置を求める）
+# ---------------------------------------------------------------------------
+def hotland():
+    rows, page, total = [], 1, 1
+    while page <= total:
+        j = get("https://search.hotland.co.jp/api/search",
+                {"limit": 100, "web_gyotai_id": "", "sub_gyotai_id": "", "prefecture_id": PREF_CODE,
+                 "country_id": "", "keyword": "", "page": page})
+        total = j.get("total_page") or 1
+        for x in j["result"]:
+            rows.append({"id": x["id"], "b": x.get("brand_name", ""), "n": x.get("shop_name", ""),
+                         "a": (x.get("address") or "").replace(" ", "").replace("　", "")})
+        page += 1
+    return rows
+
+
+# ---------------------------------------------------------------------------
+# 光フードサービス（店舗検索ページのHTML。優待が使える「大黒」「大国」「魚椿」の店舗のみ）
+# ---------------------------------------------------------------------------
+def hikari_food():
+    import html as H
+    import re
+    body = get("https://shop.hikari-food-service.jp/stores", {"prefecture": PREF_CODE}, as_json=False)
+    rows = []
+    for sec in re.findall(r'<section class="_stores__item[^"]*">(.*?)</section>', body, re.S):
+        name = re.search(r"<h2[^>]*>(.*?)</h2>", sec, re.S)
+        addr = re.search(r'<p class="_stores__address[^"]*">(.*?)</p>', sec, re.S)
+        sid = re.search(r'href="/stores/(\d+)"', sec)
+        if not (name and addr and sid):
+            continue
+        n = re.sub(r"\s+", " ", H.unescape(re.sub(r"<[^>]+>", "", name.group(1)))).strip()
+        a = re.sub(r"\s+", "", H.unescape(re.sub(r"<[^>]+>", "", addr.group(1))))
+        a = re.sub(r"〒?\d{3}-\d{4}", "", a)
+        brand = next((b for b in ("大黒", "大国", "魚椿") if b in n), None)
+        if brand and a.startswith(PREF):
+            rows.append({"id": sid.group(1), "b": brand, "n": n, "a": a})
+    return rows
+
+
+# ---------------------------------------------------------------------------
+# きちり（店舗検索ページの一覧 → 各店舗ページの住所）
+# ---------------------------------------------------------------------------
+KICHIRI_BRANDS = ["ハンバーグ＆ステーキ いしがま工房", "いしがまやハンバーグ", "とんかつとん久", "とん久", "VEGEGO", "KICHIRI", "KI・CHI・RI"]
+
+
+def kichiri():
+    import html as H
+    import re
+    body = get("https://kichiri.jp/search/", as_json=False)
+    rows = []
+    for li in re.findall(r"<li>\s*<a href=\"(https://kichiri\.jp/[^\"]+)\">(.*?)</a>\s*</li>", body, re.S):
+        url, inner = li
+        pref = re.search(r'class="txt">\s*([^<]+?)\s*<', inner)
+        name = re.search(r'class="name">\s*([^<]+?)\s*<', inner)
+        if not (pref and name and pref.group(1) == PREF):
+            continue
+        n = re.sub(r"\s+", " ", H.unescape(name.group(1))).strip()
+        page = get(url, as_json=False)
+        text = re.sub(r"<script.*?</script>|<style.*?</style>", "", page, flags=re.S)
+        text = re.sub(r"<[^>]+>", " ", text)
+        addr = re.search(r"(%s[^\s　]+)" % PREF, H.unescape(text))
+        if not addr:
+            continue
+        brand = next((b for b in KICHIRI_BRANDS if n.startswith(b)), n.split(" ")[0])
+        rows.append({"id": url.rstrip("/").split("/", 3)[-1], "b": brand, "n": n[len(brand):].strip() or n, "a": addr.group(1)})
+    return rows
+
+
+# ---------------------------------------------------------------------------
+# FOOD & LIFE：鮨 酒 肴 杉玉（公式の店舗一覧ページ）
+# ---------------------------------------------------------------------------
+def sugidama():
+    import html as H
+    import re
+    body = get("https://www.sugidama-sushiizakaya.jp/shop/", as_json=False)
+    rows = {}
+    for sid, name, addr in re.findall(r'href="/shop/(\d+)/" class="s_name">(.*?)</a>.*?class="s_address">(.*?)</p>', body, re.S):
+        a = re.sub(r"\s+", " ", H.unescape(addr)).strip()
+        if a.startswith(PREF):
+            n = H.unescape(name).strip()
+            rows[sid] = {"id": sid, "b": "杉玉", "n": n.replace("鮨 酒 肴 杉玉", "").strip() or n, "a": a.split(" ")[0]}
+    return list(rows.values())
+
+
+# ---------------------------------------------------------------------------
 # 登録一覧（code は優待手帳の銘柄マスタのコードと一致させる）
 # ---------------------------------------------------------------------------
 SOURCES = [
@@ -373,5 +538,50 @@ SOURCES = [
         "code": "3561", "name": "力の源ホールディングス", "brands": ["一風堂"],
         "url": "https://stores.ippudo.com/",
         "fetch": yext_pages("https://stores.ippudo.com"),
+    },
+    {
+        "code": "3397", "name": "トリドールホールディングス", "brands": ["丸亀製麺", "ずんどう屋", "コナズ珈琲"],
+        "url": "https://stores.toridoll.com/search",
+        "note": "券売機を使う一部店舗では利用不可（愛知県内は該当なし）",
+        "fetch": toridoll,
+    },
+    {
+        "code": "3387", "name": "クリエイト・レストランツ・ホールディングス", "brands": ["磯丸水産", "しゃぶ菜", "菜菜麻辣湯"],
+        "url": "https://www.create-restaurants.co.jp/",
+        "note": "公式の店舗データで「株主優待利用可」の店舗のみ",
+        "fetch": create_restaurants,
+    },
+    {
+        "code": "9279", "name": "ギフトホールディングス", "brands": ["ラーメン豚山"],
+        "url": "https://shop.butayama.com/",
+        "note": "町田商店（設定で除外）以外はラーメン豚山のみ収録",
+        "fetch": canly_sites([("https://shop.butayama.com", "ラーメン豚山")]),
+    },
+    {
+        "code": "3196", "name": "ホットランドホールディングス", "brands": ["築地銀だこハイボール酒場", "昇家", "李昇", "銀のあん"],
+        "url": "https://hotland.co.jp/store/",
+        "fetch": hotland,
+    },
+    {
+        "code": "138A", "name": "光フードサービス", "brands": ["大黒", "魚椿", "大国"],
+        "url": "https://shop.hikari-food-service.jp/stores",
+        "note": "優待が使える大黒・大国・魚椿のみ（金山家・焼肉デラックスは対象外）",
+        "fetch": hikari_food,
+    },
+    {
+        "code": "3547", "name": "ユニシアホールディングス", "brands": ["串カツ田中"],
+        "url": "https://restaurant.kushi-tanaka.com/",
+        "fetch": canly_sites([("https://restaurant.kushi-tanaka.com", "串カツ田中")]),
+    },
+    {
+        "code": "3082", "name": "きちりホールディングス", "brands": ["いしがまやハンバーグ", "VEGEGO", "とん久"],
+        "url": "https://kichiri.jp/search/",
+        "fetch": kichiri,
+    },
+    {
+        "code": "3563", "name": "FOOD & LIFE COMPANIES", "brands": ["杉玉"],
+        "url": "https://www.sugidama-sushiizakaya.jp/shop/",
+        "note": "杉玉のみ収録（京樽は未収録）",
+        "fetch": sugidama,
     },
 ]
