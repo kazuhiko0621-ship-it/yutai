@@ -18,7 +18,7 @@ def get(url, params=None, headers=None, as_json=True, retries=2):
     for i in range(retries + 1):
         try:
             time.sleep(WAIT)
-            with urllib.request.urlopen(urllib.request.Request(url, headers=h), timeout=30) as r:
+            with urllib.request.urlopen(urllib.request.Request(url, headers=h), timeout=60) as r:
                 body = r.read().decode(r.headers.get_content_charset() or "utf-8", "replace")
             return json.loads(body) if as_json else body
         except Exception as e:  # noqa: BLE001
@@ -38,6 +38,25 @@ def geocode(address):
         return None
     lon, lat = res[0]["geometry"]["coordinates"]
     return round(lat, 6), round(lon, 6)
+
+
+def _supabase(index_html):
+    import re
+    html = index_html.read_text(encoding="utf-8")
+    url = re.search(r'SUPABASE_URL\s*=\s*"([^"]+)"', html).group(1)
+    key = re.search(r'SUPABASE_ANON_KEY\s*=\s*"([^"]+)"', html).group(1)
+    return url, {"apikey": key, "Authorization": f"Bearer {key}"}
+
+
+def load_areas(index_html):
+    """店舗マップの対象都道府県（yutai_store_areas）を {県名: 定期更新するか} で返す。読めなければ None。"""
+    try:
+        url, headers = _supabase(index_html)
+        rows = get(f"{url}/rest/v1/yutai_store_areas", {"select": "pref,auto_update"}, headers=headers)
+        return {r["pref"]: bool(r["auto_update"]) for r in rows}
+    except Exception as e:  # noqa: BLE001
+        print(f"[warn] 対象の都道府県を読めませんでした: {e}")
+        return None
 
 
 def load_scopes(index_html):

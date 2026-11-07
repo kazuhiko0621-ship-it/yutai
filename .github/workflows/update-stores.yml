@@ -6,6 +6,10 @@ on:
     - cron: "17 21 1 1,4,7,10 *"
   workflow_dispatch:
     inputs:
+      prefs:
+        description: "収集する都道府県（空欄なら定期更新の対象県。例：大阪府 京都府）"
+        required: false
+        default: ""
       codes:
         description: "更新する銘柄コード（空欄なら全社。複数はスペース区切り）"
         required: false
@@ -25,13 +29,15 @@ concurrency:
 jobs:
   update:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
       - name: 店舗を収集
+        env:
+          PREFS: ${{ github.event.inputs.prefs }}
         run: python3 scripts/stores/collect.py ${{ github.event.inputs.codes }}
       - name: 地下鉄路線を取得
         run: python3 scripts/stores/subway.py

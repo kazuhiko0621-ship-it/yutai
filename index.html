@@ -1534,11 +1534,16 @@ async function renderMap(){
     <div id="mlist"></div>
     <label class="switch" style="margin-top:10px;"><input type="checkbox" id="mall" ${mapState.showAll ? "checked" : ""}><span class="sw-track"></span>保有していない銘柄の店舗も表示</label>
     <div class="map-foot">
-      店舗データ：<b>${esc(data.area)}</b>・${esc(data.updated)} 更新（3か月ごとに自動更新）<br>
+      店舗データ：<b>${esc(data.area)}</b>・${esc(data.updated)} 更新<br>
       ${shown.filter(c => c.note || c.error).map(c => `・<b>${esc(label(c))}</b>：${esc(c.note || "")}${c.error ? `<span class="st-note">（前回更新に失敗：${esc(c.error)}）</span>` : ""}`).join("<br>")}
       ${missing.length ? `<br>地図に未収録の保有銘柄：${missing.map(esc).join("、")}` : ""}
       <br>距離は直線距離です。所要時間は「経路」から Google マップで確認できます。
-    </div>`;
+    </div>
+    <details class="card" id="area-card" style="margin-top:14px;" ${mapState.areaOpen ? "open" : ""}>
+      <summary style="font-weight:800; cursor:pointer;">対象の都道府県（定期更新の設定）</summary>
+      <div id="area-body" style="margin-top:10px;"><div class="sub">読み込み中…</div></div>
+    </details>`;
+  setupAreaCard(data);
 
   // 取得範囲（なし／除外ブランド）は地図側でも反映（次回収集を待たずに効くように）
   const inScope = s => {
@@ -1657,6 +1662,61 @@ async function renderMap(){
       () => { $("#mloc").disabled = false; toast("現在地を取得できませんでした（位置情報の許可をご確認ください）"); },
       { enableHighAccuracy:true, timeout:15000, maximumAge:60000 }
     );
+  };
+}
+
+/* 店舗マップ：対象の都道府県（yutai_store_areas）
+   定期更新ON＝3か月ごとに収集し直す／OFF＝今のデータを残して更新しない／削除＝次回の収集で地図から消える */
+const ALL_PREFS = "北海道 青森県 岩手県 宮城県 秋田県 山形県 福島県 茨城県 栃木県 群馬県 埼玉県 千葉県 東京都 神奈川県 新潟県 富山県 石川県 福井県 山梨県 長野県 岐阜県 静岡県 愛知県 三重県 滋賀県 京都府 大阪府 兵庫県 奈良県 和歌山県 鳥取県 島根県 岡山県 広島県 山口県 徳島県 香川県 愛媛県 高知県 福岡県 佐賀県 長崎県 熊本県 大分県 宮崎県 鹿児島県 沖縄県".split(" ");
+async function setupAreaCard(data){
+  const card = $("#area-card"); if(!card) return;
+  card.ontoggle = () => { mapState.areaOpen = card.open; };
+  const { data:rows, error } = await sb.from("yutai_store_areas").select("*");
+  const body = $("#area-body"); if(!body) return;
+  if(error){ body.innerHTML = `<div class="err">読み込めませんでした</div>`; console.error(error); return; }
+  rows.sort((a, b) => ALL_PREFS.indexOf(a.pref) - ALL_PREFS.indexOf(b.pref));
+  const info = data.areas || {};
+  const have = new Set(rows.map(r => r.pref));
+  body.innerHTML = `
+    ${rows.map(r => {
+      const a = info[r.pref];
+      const status = a ? `${a.count}店・${esc(a.updated || "")} 更新` : "未収集（次回の収集で取り込み）";
+      return `<div class="row-between" style="padding:8px 0; border-bottom:1px solid var(--line); gap:8px;">
+        <div style="min-width:0;"><b>${esc(r.pref)}</b> <span class="sub">${status}</span></div>
+        <div style="display:flex; align-items:center; gap:8px; flex-shrink:0;">
+          <label class="switch" style="margin:0;"><input type="checkbox" data-auto="${esc(r.pref)}" ${r.auto_update ? "checked" : ""}><span class="sw-track"></span>定期更新</label>
+          <button class="btn ghost small" data-del="${esc(r.pref)}">削除</button>
+        </div>
+      </div>`;
+    }).join("") || `<div class="sub">対象の県がありません</div>`}
+    <div style="display:flex; gap:6px; margin-top:12px;">
+      <select id="area-add" style="flex:1; min-width:0;">
+        <option value="">県を追加…</option>
+        ${ALL_PREFS.filter(p => !have.has(p)).map(p => `<option>${p}</option>`).join("")}
+      </select>
+      <button class="btn primary small" id="area-add-btn">追加</button>
+    </div>
+    <p class="sub" style="margin:10px 0 0; line-height:1.7;">
+      ・定期更新ON：3か月ごとの自動更新で店舗を収集し直します<br>
+      ・定期更新OFF：今の店舗データを地図に残したまま、更新はしません（旅行後など）<br>
+      ・削除：次回の収集で、その県の店舗が地図から消えます<br>
+      ・追加した県は次回の収集で取り込まれます。すぐ反映したいときは Claude に「○○県を収集して」と伝えてください
+    </p>`;
+  body.querySelectorAll("[data-auto]").forEach(cb => cb.onchange = async () => {
+    const { error } = await sb.from("yutai_store_areas").update({ auto_update:cb.checked, updated_at:new Date().toISOString() }).match({ pref:cb.dataset.auto });
+    toast(error ? "保存に失敗しました" : `${cb.dataset.auto}：定期更新を${cb.checked ? "ON" : "OFF"}にしました`);
+  });
+  body.querySelectorAll("[data-del]").forEach(b => b.onclick = async () => {
+    if(!confirm(`${b.dataset.del} を対象から外しますか？\n次回の収集で、この県の店舗は地図から消えます。`)) return;
+    const { error } = await sb.from("yutai_store_areas").delete().match({ pref:b.dataset.del });
+    if(error){ toast("削除に失敗しました"); return; }
+    toast(`${b.dataset.del} を対象から外しました`); setupAreaCard(data);
+  });
+  $("#area-add-btn").onclick = async () => {
+    const pref = $("#area-add").value; if(!pref) return;
+    const { error } = await sb.from("yutai_store_areas").upsert({ pref, auto_update:true });
+    if(error){ toast("追加に失敗しました"); return; }
+    toast(`${pref} を追加しました（次回の収集で取り込み）`); setupAreaCard(data);
   };
 }
 
