@@ -40,6 +40,25 @@ def geocode(address):
     return round(lat, 6), round(lon, 6)
 
 
+def _supabase(index_html):
+    import re
+    html = index_html.read_text(encoding="utf-8")
+    url = re.search(r'SUPABASE_URL\s*=\s*"([^"]+)"', html).group(1)
+    key = re.search(r'SUPABASE_ANON_KEY\s*=\s*"([^"]+)"', html).group(1)
+    return url, {"apikey": key, "Authorization": f"Bearer {key}"}
+
+
+def load_areas(index_html):
+    """店舗マップの対象都道府県（yutai_store_areas）を {県名: 定期更新するか} で返す。読めなければ None。"""
+    try:
+        url, headers = _supabase(index_html)
+        rows = get(f"{url}/rest/v1/yutai_store_areas", {"select": "pref,auto_update"}, headers=headers)
+        return {r["pref"]: bool(r["auto_update"]) for r in rows}
+    except Exception as e:  # noqa: BLE001
+        print(f"[warn] 対象の都道府県を読めませんでした: {e}")
+        return None
+
+
 def load_scopes(index_html):
     """優待手帳の Supabase から店舗マップの取得範囲（yutai_store_scope）を読む。
     接続先は index.html に書かれた URL・公開キーを使う。読めなければ空（＝全て扱い）。"""

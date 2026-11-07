@@ -1,6 +1,6 @@
 """会社ごとの店舗取得処理。
 
-1社 = SOURCES の1要素。fetch() は次のキーを持つdictのリストを返す:
+1社 = SOURCES の1要素。fetch(pr) は都道府県 pr（prefs.Pref）の店舗を、次のキーを持つdictのリストで返す:
   id  : その会社の中で一意な店舗ID
   b   : ブランド名（例: はなまるうどん）
   n   : 店舗名
@@ -8,10 +8,14 @@
   lat, lng : 緯度経度（取れなければ省略。国土地理院APIで補完される）
   x   : 注意書き（任意。例: 優待利用可否が不明）
 """
+import functools
+
 from common import get
 
-PREF = "愛知県"
-PREF_CODE = "23"
+
+def once(fn):
+    """全国分をまとめて返す取得処理を、1回の実行中は使い回す（複数県を収集するとき用）"""
+    return functools.lru_cache(maxsize=None)(fn)
 
 
 # ---------------------------------------------------------------------------
@@ -19,10 +23,10 @@ PREF_CODE = "23"
 # ---------------------------------------------------------------------------
 def navitime(base, brand_of=None, extra=None):
     """base 例: https://stores.yoshinoya.com/yoshinoya"""
-    def fetch():
+    def fetch(pr):
         rows, offset, total = [], 0, 1
         while offset < total:
-            params = {"datum": "wgs84", "limit": 50, "offset": offset, "address": PREF_CODE, "sort": "admin_jis"}
+            params = {"datum": "wgs84", "limit": 50, "offset": offset, "address": pr.code2, "sort": "admin_jis"}
             if extra:
                 params.update(extra)
             j = get(f"{base}/api/proxy2/shop/list", params)
@@ -45,7 +49,7 @@ def navitime(base, brand_of=None, extra=None):
 # ---------------------------------------------------------------------------
 # コメダ（自社API。KOMECA取扱店のみ優待が使える）
 # ---------------------------------------------------------------------------
-def komeda():
+def komeda(pr):
     api = "https://eu.komeda.co.jp/v1/hp/shop"
     # 8=コメダ珈琲店（海外）は対象外。ブランド名はサイトのメタデータから取る
     meta = get("https://eu.komeda.co.jp/v1/hp/shop-meta-data")
@@ -53,7 +57,7 @@ def komeda():
     brands = {int(v["id"]): v["display_name"] for v in bt["values"] if v["id"] != "8"}
     rows = []
     for bt, bname in brands.items():
-        lst = get(api, {"brand_type": bt, "all": "true", "prefecture": PREF})["items"]
+        lst = get(api, {"brand_type": bt, "all": "true", "prefecture": pr.name})["items"]
         for it in lst:
             s = get(f"{api}/{it['id']}")["shop"]
             pay = next((d for d in s.get("details", []) if d.get("id") == "207-4"), None)
@@ -71,19 +75,21 @@ def komeda():
 # ---------------------------------------------------------------------------
 # マクドナルド（地図範囲指定のAPI。県の範囲を格子に分けて取得）
 # ---------------------------------------------------------------------------
-AICHI_BOUNDS = (34.55, 136.65, 35.45, 137.85)  # 南, 西, 北, 東
+def grid_boxes(bounds, step=0.25):
+    """県の範囲を約0.25度（約25km）四方の格子に分ける"""
+    s, w, n, e = bounds
+    ny, nx = max(1, round((n - s) / step)), max(1, round((e - w) / step))
+    for i in range(ny):
+        for k in range(nx):
+            yield (s + (n - s) * i / ny, w + (e - w) * k / nx, s + (n - s) * (i + 1) / ny, w + (e - w) * (k + 1) / nx)
 
 
-def mcdonalds():
-    s, w, n, e = AICHI_BOUNDS
-    grid, rows = 6, {}
-    for i in range(grid):
-        for k in range(grid):
-            b = (s + (n - s) * i / grid, w + (e - w) * k / grid,
-                 s + (n - s) * (i + 1) / grid, w + (e - w) * (k + 1) / grid)
-            for p in get("https://map.mcdonalds.co.jp/api/poi", {"bounds": ",".join(f"{v:.5f}" for v in b)}):
-                rows[p["key"]] = {"id": p["key"], "b": "マクドナルド", "n": p["name"], "a": p["address"],
-                                  "lat": p["latitude"], "lng": p["longitude"]}
+def mcdonalds(pr):
+    rows = {}
+    for b in grid_boxes(pr.bounds, 0.15):
+        for p in get("https://map.mcdonalds.co.jp/api/poi", {"bounds": ",".join(f"{v:.5f}" for v in b)}):
+            rows[p["key"]] = {"id": p["key"], "b": "マクドナルド", "n": p["name"], "a": p["address"],
+                              "lat": p["latitude"], "lng": p["longitude"]}
     return list(rows.values())
 
 
@@ -91,25 +97,46 @@ def mcdonalds():
 # Canly（店舗ページCMS。あみやき亭グループなどが利用）: 全国分が1リクエストで返る
 # ---------------------------------------------------------------------------
 def canly(directory_id):
-    def fetch():
+    @once
+    def fetch_all():
         j = get(f"https://api.site.can-ly.com/v2/directories/{directory_id}/shops/search", {"sort": "area:asc"})
         return [{"id": s["id"], "b": (s.get("brand") or {}).get("name", ""), "n": s["nameKanji"],
                  "a": s.get("address", ""), "lat": float(s["latitude"]) if s.get("latitude") else None,
                  "lng": float(s["longitude"]) if s.get("longitude") else None}
                 for s in j["shops"]]
+
+    def fetch(pr):
+        return [r for r in fetch_all() if r["a"].startswith(pr.name)]
     return fetch
 
 
 # ---------------------------------------------------------------------------
 # ジェイグループ（自社サイト。「株主優待券使用可」で絞り込んだ一覧をページ送りで取得）
 # ---------------------------------------------------------------------------
-def jgroup():
+@once
+def jgroup_area_terms():
+    """店舗検索フォームの「エリア」から 都道府県名→番号 の対応を作る"""
     import html as H
     import re
+    body = get("https://www.jgroup.jp/brand/", as_json=False)
+    terms = {}
+    for m in re.finditer(r'name="store_area_term\[\]"\s+value="(\d+)"', body):
+        label = re.sub(r"<[^>]+>", " ", body[m.end():m.end() + 300])
+        label = H.unescape(label).strip().split()[0] if label.strip() else ""
+        terms.setdefault(label, m.group(1))
+    return terms
+
+
+def jgroup(pr):
+    import html as H
+    import re
+    term = jgroup_area_terms().get(pr.name) or jgroup_area_terms().get(pr.short)
+    if not term:
+        return []  # その県に店舗がない
     rows, page = [], 1
     while True:
         base = "https://www.jgroup.jp/brand/" + (f"page/{page}/" if page > 1 else "")
-        body = get(base, {"store_area_term[]": "27", "store_service[]": "株主優待券使用可"}, as_json=False)
+        body = get(base, {"store_area_term[]": term, "store_service[]": "株主優待券使用可"}, as_json=False)
         arts = re.findall(r'<article class="c-card_brand.*?</article>', body, re.S)
         for art in arts:
             m_id = re.search(r'/brand/(\d+)/', art)
@@ -121,7 +148,7 @@ def jgroup():
             a = re.sub(r"\s+", "", H.unescape(re.sub(r"<[^>]+>", "", addr.group(1))))
             a = re.sub(r"〒?\d{3}-\d{4}", "", a)
             if not re.match(r"^.{2,3}[都道府県]", a):
-                a = PREF + a  # 県名が省略されている住所（愛知県で絞り込み済み）
+                a = pr.name + a  # 県名が省略されている住所（県で絞り込み済み）
             rows.append({"id": m_id.group(1), "b": "", "n": name, "a": a})
         if not arts or f"page/{page + 1}/" not in body:
             break
@@ -137,10 +164,10 @@ FUJIO_BRANDS = ["まいどおおきに食堂", "さち福や", "串家物語", "
                 "土山人", "SAM'S", "天鳳"]
 
 
-def fujio():
+def fujio(pr):
     import html as H
     import re
-    body = get("https://www.fujiofood.com/shop_search/index.php", {"prefName": "愛知", "brandName": ""}, as_json=False)
+    body = get("https://www.fujiofood.com/shop_search/index.php", {"prefName": pr.short, "brandName": ""}, as_json=False)
     rows = []
     for li in re.findall(r'<li class="prefSec-store">(.*?)</li>', body, re.S):
         ttl = re.search(r'<p class="ttl">(.*?)</p>', li, re.S)
@@ -152,8 +179,8 @@ def fujio():
         a = re.sub(r"<[^>]+>", " ", H.unescape(addr.group(1)))
         a = re.sub(r"〒\d{3}-\d{4}", "", a)
         a = re.sub(r"\s+", "", a)
-        if not a.startswith(PREF):
-            a = PREF + a
+        if not a.startswith(pr.name):
+            a = pr.name + a
         brand = next((b for b in FUJIO_BRANDS if name.startswith(b)), name.split(" ")[0])
         rows.append({"id": sid.group(1), "b": brand, "n": name[len(brand):].strip() or name, "a": a})
     return rows
@@ -168,33 +195,42 @@ MONOGATARI_BRANDS = {1: "焼肉きんぐ", 2: "丸源ラーメン", 3: "お好�
                      14: "魚貝三昧げん屋", 15: "町中華 丸福飯店", 16: "肉讃岐 もっちりうどん源次郎"}
 
 
-def monogatari():
+@once
+def monogatari_all():
     api = "https://shop.monogatari.co.jp/api/v1/shops/"
     rows, page, last = [], 1, 1
     while page <= last:
         j = get(api, {"page": page})
         last = j.get("last_page", 1)
         for s in j["data"]:
-            if s.get("prefecture_id") != int(PREF_CODE) or s.get("not_public_flag"):
+            if s.get("not_public_flag"):
                 continue
-            rows.append({"id": s["shop_code"], "b": MONOGATARI_BRANDS.get(s["brand_id"], f"ブランド{s['brand_id']}"),
+            rows.append({"pid": s.get("prefecture_id"), "id": s["shop_code"], "b": MONOGATARI_BRANDS.get(s["brand_id"], f"ブランド{s['brand_id']}"),
                          "n": s["name"], "a": s.get("address", ""), "lat": s.get("latitude"), "lng": s.get("longitude")})
         page += 1
     return rows
 
 
+def monogatari(pr):
+    return [{k: v for k, v in r.items() if k != "pid"} for r in monogatari_all() if r["pid"] == pr.code]
+
+
 # ---------------------------------------------------------------------------
 # ブロンコビリー（店舗一覧ページ → 各店舗ページの住所・地図座標）
 # ---------------------------------------------------------------------------
-def bronco():
+BRONCO_EXTRA_AREAS = {"愛知県": ["名古屋"], "大阪府": ["大阪市"]}  # 県名を含まない地域見出し
+
+
+def bronco(pr):
     import html as H
     import re
     top = get("https://www.bronco.co.jp/shop/", as_json=False)
     urls = []
-    for area in ("nagoya", "aichi"):
-        m = re.search(r'<li class="shop_contents_list_item[^"]*" data-id="%s">(.*?)</ul>' % area, top, re.S)
-        if m:
-            urls += re.findall(r'href="(https://www\.bronco\.co\.jp/shop/[^"]+)"', m.group(1))
+    keys = [pr.name] + BRONCO_EXTRA_AREAS.get(pr.name, [])  # 「愛知県郊外」「名古屋」など
+    for title, block in re.findall(r'<li class="shop_contents_list_item[^"]*" data-id="[^"]*">\s*<h3[^>]*>(.*?)</h3>(.*?)</ul>', top, re.S):
+        title = re.sub(r"<[^>]+>", "", title)
+        if any(k in title for k in keys):
+            urls += re.findall(r'href="(https://www\.bronco\.co\.jp/shop/[^"]+)"', block)
     rows = []
     for u in dict.fromkeys(urls):
         page = get(u, as_json=False)
@@ -214,16 +250,30 @@ def bronco():
 # ---------------------------------------------------------------------------
 # コシダカ：カラオケまねきねこ（WordPressの「もっと見る」と同じ呼び出しで県内全件を取得）
 # ---------------------------------------------------------------------------
-def manekineko():
+@once
+def manekineko_slugs():
+    """店舗一覧ページの都道府県リンク（例：/locations/aichi/）から 県名→英字 を作る"""
+    import re
+    body = get("https://www.karaokemanekineko.jp/locations/", as_json=False)
+    return {name: slug for slug, name in re.findall(r'href="[^"]*/locations/([a-z-]+)/"[^>]*>\s*(北海道|[^<\s(（]+?[都府県])', body)}
+
+
+def manekineko(pr):
     import html as H
     import json as J
     import re
     import urllib.parse
     import urllib.request
     from common import UA
-    page = get("https://www.karaokemanekineko.jp/locations/aichi/", as_json=False)
+    slug = manekineko_slugs().get(pr.name) or pr.romaji
+    try:
+        page = get(f"https://www.karaokemanekineko.jp/locations/{slug}/", as_json=False, retries=0)
+    except RuntimeError as e:
+        if "404" in str(e):
+            return []  # その県に店舗がない
+        raise
     cfg = J.loads(re.search(r"LOC_AJAX\s*=\s*(\{[^;]+\})", page).group(1))
-    data = urllib.parse.urlencode({"action": "loc_load_more", "nonce": cfg["nonce"], "pref": "aichi", "city": "",
+    data = urllib.parse.urlencode({"action": "loc_load_more", "nonce": cfg["nonce"], "pref": slug, "city": "",
                                    "q": "", "mode": "", "lat": "", "lng": "", "page": 1, "per_page": 200}).encode()
     req = urllib.request.Request(cfg["ajax_url"], data=data, headers={"User-Agent": UA})
     with urllib.request.urlopen(req, timeout=30) as r:
@@ -233,7 +283,7 @@ def manekineko():
     for unit in re.findall(r'<div class="content__unit js-store".*?(?=<div class="content__unit js-store"|$)', body, re.S):
         br = re.search(r'content__unit-ttl__branch">(.*?)<', unit, re.S)
         ad = re.search(r'content__unit-address">(.*?)<', unit, re.S)
-        href = re.search(r'href="([^"]*/locations/aichi/[^"]+)"', unit)
+        href = re.search(r'href="([^"]*/locations/%s/[^"]+)"' % slug, unit)
         if br and ad:
             rows.append({"id": (href.group(1) if href else br.group(1)).rstrip("/").split("/")[-1],
                          "b": "カラオケまねきねこ", "n": H.unescape(br.group(1)).strip(),
@@ -244,18 +294,14 @@ def manekineko():
 # ---------------------------------------------------------------------------
 # 第一興商：ビッグエコー（地図範囲指定のAPI。マクドナルドと同じ方式）
 # ---------------------------------------------------------------------------
-def bigecho():
-    s, w, n, e = AICHI_BOUNDS
-    grid, rows = 3, {}
-    for i in range(grid):
-        for k in range(grid):
-            b = (s + (n - s) * i / grid, w + (e - w) * k / grid,
-                 s + (n - s) * (i + 1) / grid, w + (e - w) * (k + 1) / grid)
-            j = get("https://shop.big-echo.jp/api/point", {"b": ",".join(f"{v:.5f}" for v in b), "np": "{}"})
-            for p in j["items"]:
-                rows[p["key"]] = {"id": p["key"], "b": "ビッグエコー",
-                                  "n": p["name"].replace("カラオケ ビッグエコー", "").strip() or p["name"],
-                                  "a": p["address"].strip(), "lat": p["latitude"], "lng": p["longitude"]}
+def bigecho(pr):
+    rows = {}
+    for b in grid_boxes(pr.bounds, 0.3):
+        j = get("https://shop.big-echo.jp/api/point", {"b": ",".join(f"{v:.5f}" for v in b), "np": "{}"})
+        for p in j["items"]:
+            rows[p["key"]] = {"id": p["key"], "b": "ビッグエコー",
+                              "n": p["name"].replace("カラオケ ビッグエコー", "").strip() or p["name"],
+                              "a": p["address"].strip(), "lat": p["latitude"], "lng": p["longitude"]}
     return list(rows.values())
 
 
@@ -272,7 +318,8 @@ def yext_pages(base, country="日本"):
         body = get(base + "/" + path, as_json=False)
         return [x for x in re.findall(r'href="([^"]+)"', body) if x.startswith("../")]
 
-    def fetch():
+    def fetch(pr):
+        PREF = pr.name
         pref_path = U.quote(country) + "/" + U.quote(PREF)
         store_ids, seen_city = set(), set()
         for href in links(pref_path):
@@ -316,9 +363,13 @@ TORIDOLL_BRANDS = {"Marugame Seimen": "丸亀製麺", "Zundo-ya": "ずんどう�
                    "Niku no Yama Gyu": "肉のヤマ牛"}
 
 
-def toridoll():
+TORIDOLL_EXTRA_QUERIES = {"愛知県": ["豊橋市"], "北海道": ["旭川市", "函館市", "釧路市"]}  # 県の端までカバーする追加地点
+
+
+def toridoll(pr):
+    PREF = pr.name
     rows = {}
-    for q in ("愛知県", "豊橋市"):
+    for q in [pr.name] + TORIDOLL_EXTRA_QUERIES.get(pr.name, []):
         offset, count = 0, 1
         while offset < count:
             j = get("https://stores.toridoll.com/searchapi", {"q": q, "r": 100, "per": 50, "offset": offset, "l": "ja"},
@@ -342,14 +393,20 @@ def toridoll():
 # クリエイト・レストランツ（レストランサーチのページに埋め込まれた全店舗データ。
 # 「shareholder」が available の店舗だけを優待対象として収録）
 # ---------------------------------------------------------------------------
-def create_restaurants():
+@once
+def create_restaurants_all():
     import json as J
-    import re
     page = get("https://www.create-restaurants.co.jp/", as_json=False)
     i = page.index("'rest_api_country_5':") + len("'rest_api_country_5':")
     shops, _ = J.JSONDecoder().raw_decode(page[i:])
+    return shops
+
+
+def create_restaurants(pr):
+    import re
+    PREF = pr.name
     rows = []
-    for x in shops:
+    for x in create_restaurants_all():
         if x.get("pref_name") != PREF or x.get("shareholder") != "available" or str(x.get("status")) != "1":
             continue
         name = re.sub(r"[ 　]+", " ", x["name_jp"]).strip()
@@ -370,12 +427,17 @@ def canly_sites(sites):
     import re
     import urllib.parse as U
 
-    def fetch():
+    def fetch(pr):
         rows = []
         for base, brand in sites:
             page, maxp = 1, 1
             while page <= maxp:
-                body = get(f"{base}/{U.quote(PREF)}/" + (f"?page={page}" if page > 1 else ""), as_json=False)
+                try:
+                    body = get(f"{base}/{U.quote(pr.name)}/" + (f"?page={page}" if page > 1 else ""), as_json=False, retries=0)
+                except RuntimeError as e:
+                    if "404" in str(e):
+                        break  # その県に店舗がない
+                    raise
                 pp = J.loads(re.search(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', body, re.S).group(1))["props"]["pageProps"]
                 maxp = pp.get("maxPage") or 1
                 for x in pp.get("shops", []):
@@ -392,11 +454,11 @@ def canly_sites(sites):
 # ---------------------------------------------------------------------------
 # ホットランド（グループ店舗検索のAPI。座標が不正確なため住所から位置を求める）
 # ---------------------------------------------------------------------------
-def hotland():
+def hotland(pr):
     rows, page, total = [], 1, 1
     while page <= total:
         j = get("https://search.hotland.co.jp/api/search",
-                {"limit": 100, "web_gyotai_id": "", "sub_gyotai_id": "", "prefecture_id": PREF_CODE,
+                {"limit": 100, "web_gyotai_id": "", "sub_gyotai_id": "", "prefecture_id": pr.code2,
                  "country_id": "", "keyword": "", "page": page})
         total = j.get("total_page") or 1
         for x in j["result"]:
@@ -409,10 +471,10 @@ def hotland():
 # ---------------------------------------------------------------------------
 # 光フードサービス（店舗検索ページのHTML。優待が使える「大黒」「大国」「魚椿」の店舗のみ）
 # ---------------------------------------------------------------------------
-def hikari_food():
+def hikari_food(pr):
     import html as H
     import re
-    body = get("https://shop.hikari-food-service.jp/stores", {"prefecture": PREF_CODE}, as_json=False)
+    body = get("https://shop.hikari-food-service.jp/stores", {"prefecture": pr.code2}, as_json=False)
     rows = []
     for sec in re.findall(r'<section class="_stores__item[^"]*">(.*?)</section>', body, re.S):
         name = re.search(r"<h2[^>]*>(.*?)</h2>", sec, re.S)
@@ -424,7 +486,7 @@ def hikari_food():
         a = re.sub(r"\s+", "", H.unescape(re.sub(r"<[^>]+>", "", addr.group(1))))
         a = re.sub(r"〒?\d{3}-\d{4}", "", a)
         brand = next((b for b in ("大黒", "大国", "魚椿") if b in n), None)
-        if brand and a.startswith(PREF):
+        if brand and a.startswith(pr.name):
             rows.append({"id": sid.group(1), "b": brand, "n": n, "a": a})
     return rows
 
@@ -432,13 +494,19 @@ def hikari_food():
 # ---------------------------------------------------------------------------
 # きちり（店舗検索ページの一覧 → 各店舗ページの住所）
 # ---------------------------------------------------------------------------
+@once
+def kichiri_page():
+    return get("https://kichiri.jp/search/", as_json=False)
+
+
 KICHIRI_BRANDS = ["ハンバーグ＆ステーキ いしがま工房", "いしがまやハンバーグ", "とんかつとん久", "とん久", "VEGEGO", "KICHIRI", "KI・CHI・RI"]
 
 
-def kichiri():
+def kichiri(pr):
     import html as H
     import re
-    body = get("https://kichiri.jp/search/", as_json=False)
+    PREF = pr.name
+    body = kichiri_page()
     rows = []
     for li in re.findall(r"<li>\s*<a href=\"(https://kichiri\.jp/[^\"]+)\">(.*?)</a>\s*</li>", body, re.S):
         url, inner = li
@@ -461,10 +529,16 @@ def kichiri():
 # ---------------------------------------------------------------------------
 # FOOD & LIFE：鮨 酒 肴 杉玉（公式の店舗一覧ページ）
 # ---------------------------------------------------------------------------
-def sugidama():
+@once
+def sugidama_page():
+    return get("https://www.sugidama-sushiizakaya.jp/shop/", as_json=False)
+
+
+def sugidama(pr):
     import html as H
     import re
-    body = get("https://www.sugidama-sushiizakaya.jp/shop/", as_json=False)
+    PREF = pr.name
+    body = sugidama_page()
     rows = {}
     for sid, name, addr in re.findall(r'href="/shop/(\d+)/" class="s_name">(.*?)</a>.*?class="s_address">(.*?)</p>', body, re.S):
         a = re.sub(r"\s+", " ", H.unescape(addr)).strip()
