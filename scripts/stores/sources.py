@@ -120,10 +120,8 @@ def jgroup_area_terms():
     import re
     body = get("https://www.jgroup.jp/brand/", as_json=False)
     terms = {}
-    for m in re.finditer(r'name="store_area_term\[\]"\s+value="(\d+)"', body):
-        label = re.sub(r"<[^>]+>", " ", body[m.end():m.end() + 300])
-        label = H.unescape(label).strip().split()[0] if label.strip() else ""
-        terms.setdefault(label, m.group(1))
+    for value, label in re.findall(r'name="store_area_term\[\]"\s+value="(\d+)"\s*>\s*<span>([^<]+)</span>', body):
+        terms.setdefault(H.unescape(label).strip(), value)
     return terms
 
 

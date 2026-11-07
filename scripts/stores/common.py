@@ -18,7 +18,7 @@ def get(url, params=None, headers=None, as_json=True, retries=2):
     for i in range(retries + 1):
         try:
             time.sleep(WAIT)
-            with urllib.request.urlopen(urllib.request.Request(url, headers=h), timeout=30) as r:
+            with urllib.request.urlopen(urllib.request.Request(url, headers=h), timeout=60) as r:
                 body = r.read().decode(r.headers.get_content_charset() or "utf-8", "replace")
             return json.loads(body) if as_json else body
         except Exception as e:  # noqa: BLE001
