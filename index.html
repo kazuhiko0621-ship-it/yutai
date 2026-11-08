@@ -255,7 +255,7 @@ input:disabled{background:#EEF1ED; color:#7B8781;}
 .map-search{display:flex; gap:6px; margin-bottom:8px;}
 .map-search input{flex:1; min-width:0; font-size:16px; padding:8px 12px;}
 .map-search .btn{flex-shrink:0;}
-.map-wrap{position:relative; margin-bottom:10px;}
+.map-wrap{position:relative; z-index:0; isolation:isolate; margin-bottom:10px;} /* 地図・＋印をこの中に閉じ込め、ヘッダーやモーダルより前に出さない */
 .map-wrap #storeMap{margin-bottom:0;}
 /* 地図の中心ガイド（「地図の中心から」近い店舗を出すときの基準） */
 .map-center{position:absolute; left:50%; top:50%; width:26px; height:26px; margin:-13px 0 0 -13px; z-index:450; pointer-events:none;}
@@ -1452,6 +1452,12 @@ async function loadStores(){
   storeData = await res.json();
   return storeData;
 }
+/* 店舗の表示名：「ブランド名 店舗名」（店舗名がすでにブランド名で始まる場合はそのまま） */
+function storeTitle(s){
+  const b = (s.b || "").trim(), n = (s.n || "").trim();
+  if(!b || n.startsWith(b)) return n || b;
+  return `${b} ${n}`;
+}
 function distKm(a, b){
   const R = 6371, rad = Math.PI / 180;
   const dLat = (b.lat - a.lat) * rad, dLng = (b.lng - a.lng) * rad;
@@ -1573,8 +1579,8 @@ async function renderMap(){
 
   const popup = s => {
     const c = compOf[normCode(s.c)] || {};
-    return `<div class="pp-name">${esc(s.n)}</div>
-      <div>${s.b ? esc(s.b) + "・" : ""}${esc(c.name || s.c)}</div>
+    return `<div class="pp-name">${esc(storeTitle(s))}</div>
+      <div>${esc(c.name || s.c)}</div>
       <div class="sub">${esc(s.a)}</div>
       <div class="st-bal ${balanceOf(normCode(s.c)) ? "" : "none"}">${esc(balanceText(normCode(s.c)))}</div>
       ${s.x ? `<div class="st-note">${esc(s.x)}</div>` : ""}
@@ -1607,8 +1613,8 @@ async function renderMap(){
       return `<div class="st-item" data-key="${esc(`${s.c}|${s.id}`)}">
         <span class="st-dot" style="background:${color[code]}"></span>
         <div class="st-main">
-          <div class="st-name">${esc(s.n)}</div>
-          <div class="st-meta">${s.b ? esc(s.b) + "・" : ""}${esc(comp.name || code)}</div>
+          <div class="st-name">${esc(storeTitle(s))}</div>
+          <div class="st-meta">${esc(comp.name || code)}</div>
           <div class="st-bal ${has ? "" : "none"}">${esc(balanceText(code))}${s.x ? ` <span class="st-note">${esc(s.x)}</span>` : ""}</div>
         </div>
         <div class="st-dist">${fmtDist(d)}
