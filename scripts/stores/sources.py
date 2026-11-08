@@ -576,7 +576,7 @@ def teng(pr):
             a = H.unescape(re.split(r"<br\s*/?>", addr.group(1))[0]).strip()
             brand = next((b for b in TENG_BRANDS if name.startswith(b)), name.split(" ")[0])
             rows[link.group(1)] = {"id": link.group(1).rsplit("/", 1)[-1].replace(".html", ""), "b": brand,
-                                   "n": name[len(brand):].strip() or name, "a": re.sub(r"\s+", "", a)}
+                                   "n": name[len(brand):].strip(" ・") or name, "a": re.sub(r"\s+", "", a)}
     return list(rows.values())
 
 
