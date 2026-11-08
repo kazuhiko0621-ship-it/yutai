@@ -581,6 +581,51 @@ def teng(pr):
 
 
 # ---------------------------------------------------------------------------
+# コシダカ：カラオケショップJOYSOUND（地方別の店舗一覧）・カラオケGLANZA（店舗一覧）
+# ---------------------------------------------------------------------------
+@once
+def joysound_all():
+    import html as H
+    import re
+    rows = []
+    for area in ("hokkaido-tohoku", "kanto", "koshinetsu-hokuriku", "tokai", "kansai", "chugoku", "shikoku", "kyushu-okinawa"):
+        body = get(f"https://shop.joysound.com/area/{area}/", as_json=False)
+        for dl in re.findall(r"<dl>(.*?)</dl>", body, re.S):
+            link = re.search(r'class="shopList-link" href="https://shop\.joysound\.com/shop/([^/"]+)/?">(.*?)</a>', dl, re.S)
+            addr = re.search(r'<dd[^>]*>\s*<p>(.*?)</p>', dl, re.S)
+            if not (link and addr):
+                continue
+            name = H.unescape(re.sub(r"<[^>]+>", "", link.group(2))).strip()
+            if not name.startswith("JOYSOUND"):
+                continue  # ゆう遊空間など、優待対象外の業態
+            a = re.sub(r"\s+", " ", H.unescape(addr.group(1)).replace("\xa0", " ")).strip()
+            rows.append({"id": "js-" + link.group(1), "b": "カラオケJOYSOUND",
+                         "n": name.replace("JOYSOUND", "").strip() or name, "a": a.split(" ")[0]})
+    return rows
+
+
+@once
+def glanza_all():
+    import html as H
+    import re
+    body = get("https://glanza-k.com/shop/", as_json=False)
+    rows = []
+    for href, name, addr in re.findall(r'<h3 class="card-shop__name"[^>]*><a href="(/shop/[^"]+)">(.*?)</a></h3>.*?'
+                                       r'<address class="card-shop__address"[^>]*>\s*<p class="card-shop__text">(.*?)</p>', body, re.S):
+        n = H.unescape(name).strip()
+        rows.append({"id": "gz-" + href.strip("/").replace("/", "-"), "b": "カラオケGLANZA",
+                     "n": n.replace("カラオケ GLANZA", "").strip() or n, "a": H.unescape(addr).split(" ")[0].split("　")[0]})
+    return rows
+
+
+def koshidaka(pr):
+    rows = manekineko(pr)
+    rows += [r for r in joysound_all() if r["a"].startswith(pr.name)]
+    rows += [r for r in glanza_all() if r["a"].startswith(pr.name)]
+    return rows
+
+
+# ---------------------------------------------------------------------------
 # 登録一覧（code は優待手帳の銘柄マスタのコードと一致させる）
 # ---------------------------------------------------------------------------
 SOURCES = [
@@ -631,9 +676,9 @@ SOURCES = [
         "fetch": bronco,
     },
     {
-        "code": "2157", "name": "コシダカホールディングス", "brands": ["カラオケまねきねこ"],
+        "code": "2157", "name": "コシダカホールディングス", "brands": ["カラオケまねきねこ", "カラオケJOYSOUND", "カラオケGLANZA"],
         "url": "https://www.karaokemanekineko.jp/locations/",
-        "fetch": manekineko,
+        "fetch": koshidaka,
     },
     {
         "code": "7458", "name": "第一興商", "brands": ["ビッグエコー"],
