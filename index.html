@@ -1353,7 +1353,8 @@ async function setupScopeCard(code){
    stores.json（GitHub Actionsが定期更新）を読み、保有銘柄の店舗だけを地図に表示する。
    残額は yutai_balance から銘柄コード単位で集計して添える。 */
 let storeData = null;
-const mapState = { base:null, baseLabel:"", center:null, zoom:null, hidden:new Set(), showAll:false };
+// selMode: "all"=すべて表示 / "select"=店舗選択（selected の銘柄だけ表示）
+const mapState = { base:null, baseLabel:"", center:null, zoom:null, selMode:"all", selected:new Set(), showAll:false };
 let leafletReady = null;
 let storeMap = null;
 const normCode = c => String(c ?? "").toUpperCase();
@@ -1522,9 +1523,9 @@ async function renderMap(){
       <button class="btn primary small" id="mgo">検索</button>
       <button class="btn ghost small" id="mloc">現在地</button>
     </div>
-    <div class="chipbar" id="mchips">
-      ${shown.map(c => `<button class="fchip ${!mapState.hidden.has(c.code) ? "on" : ""}" data-code="${esc(c.code)}">
-        <span style="color:${!mapState.hidden.has(c.code) ? "#fff" : color[c.code]}">●</span> ${esc(label(c))}</button>`).join("")}
+    <div class="chipbar" id="msel">
+      <button class="fchip ${mapState.selMode === "all" ? "on" : ""}" data-sel="all">すべて</button>
+      <button class="fchip ${mapState.selMode === "select" ? "on" : ""}" data-sel="select">店舗選択${mapState.selMode === "select" ? `（${mapState.selected.size}）` : ""}</button>
     </div>
     <div class="map-wrap"><div id="storeMap"></div><div class="map-center" id="mcenter"></div></div>
     <div class="row-between" style="margin:0 2px 8px;">
@@ -1535,7 +1536,7 @@ async function renderMap(){
     <label class="switch" style="margin-top:10px;"><input type="checkbox" id="mall" ${mapState.showAll ? "checked" : ""}><span class="sw-track"></span>保有していない銘柄の店舗も表示</label>
     <div class="map-foot">
       店舗データ：<b>${esc(data.area)}</b>・${esc(data.updated)} 更新<br>
-      ${shown.filter(c => c.note || c.error).map(c => `・<b>${esc(label(c))}</b>：${esc(c.note || "")}${c.error ? `<span class="st-note">（前回更新に失敗：${esc(c.error)}）</span>` : ""}`).join("<br>")}
+      ${shown.filter(c => c.note || c.error).map(c => `・<b>${esc(c.name || label(c))}</b>：${esc(c.note || "")}${c.error ? `<span class="st-note">（前回更新に失敗：${esc(c.error)}）</span>` : ""}`).join("<br>")}
       ${missing.length ? `<br>地図に未収録の保有銘柄：${missing.map(esc).join("、")}` : ""}
       <br>距離は直線距離です。所要時間は「経路」から Google マップで確認できます。
     </div>
@@ -1552,7 +1553,8 @@ async function renderMap(){
     if(sc.scope === "none") return false;
     return !(sc.scope === "some" && (sc.exclude_brands || []).includes(s.b));
   };
-  const stores = data.stores.filter(s => !mapState.hidden.has(normCode(s.c)) && s.lat && inScope(s));
+  const visible = c => mapState.selMode === "all" || mapState.selected.has(c);
+  const stores = data.stores.filter(s => visible(normCode(s.c)) && s.lat && inScope(s));
   if(storeMap){ storeMap.remove(); storeMap = null; }
   storeMap = L.map("storeMap", { preferCanvas:true, zoomControl:true });
   const osmAttr = '<a href="https://openfreemap.org" target="_blank" rel="noopener">OpenFreeMap</a> &copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>';
@@ -1630,11 +1632,15 @@ async function renderMap(){
     m.openPopup();
     $("#storeMap").scrollIntoView({ behavior:"smooth", block:"center" });
   };
-  $("#mchips").onclick = e => {
+  $("#msel").onclick = e => {
     const b = e.target.closest(".fchip"); if(!b) return;
-    const code = b.dataset.code;
-    mapState.hidden.has(code) ? mapState.hidden.delete(code) : mapState.hidden.add(code);
-    renderMap();
+    if(b.dataset.sel === "all"){
+      // すべて：店舗選択の設定は初期化
+      mapState.selMode = "all"; mapState.selected = new Set();
+      renderMap();
+    }else{
+      openStoreSelect(shown);
+    }
   };
   $("#mall").onchange = e => { mapState.showAll = e.target.checked; renderMap(); };
   const setBase = (p, lbl) => {
@@ -1662,6 +1668,35 @@ async function renderMap(){
       () => { $("#mloc").disabled = false; toast("現在地を取得できませんでした（位置情報の許可をご確認ください）"); },
       { enableHighAccuracy:true, timeout:15000, maximumAge:60000 }
     );
+  };
+}
+
+/* 店舗マップ：「店舗選択」モーダル。銘柄を並べてオン／オフし、決定で反映 */
+function openStoreSelect(comps){
+  const cur = mapState.selMode === "select" ? new Set(mapState.selected) : new Set(); // 初回はすべてオフ
+  const list = [...comps].sort((a, b) => a.code.localeCompare(b.code));
+  const bg = document.createElement("div");
+  bg.className = "modal-bg";
+  bg.innerHTML = `
+    <div class="modal">
+      <h3>表示する銘柄を選ぶ</h3>
+      <p class="sub">オンにした銘柄の店舗だけを地図に表示します。</p>
+      <div style="max-height:56vh; overflow-y:auto; margin:0 -4px; padding:0 4px;">
+        ${list.map(c => `<label class="switch" style="display:flex; margin:0; padding:10px 2px; border-bottom:1px solid var(--line);">
+          <input type="checkbox" data-code="${esc(c.code)}" ${cur.has(c.code) ? "checked" : ""}><span class="sw-track"></span>${esc(c.name || c.code)}
+        </label>`).join("") || `<p class="sub">表示できる銘柄がありません</p>`}
+      </div>
+      <button type="button" class="btn primary" id="sel-ok" style="margin-top:12px; width:100%;">決定</button>
+      <button type="button" class="modal-cancel">キャンセル</button>
+    </div>`;
+  document.body.appendChild(bg);
+  bg.onclick = e => { if(e.target === bg) bg.remove(); };
+  bg.querySelector(".modal-cancel").onclick = () => bg.remove();
+  bg.querySelectorAll("input[data-code]").forEach(cb => cb.onchange = () => { cb.checked ? cur.add(cb.dataset.code) : cur.delete(cb.dataset.code); });
+  bg.querySelector("#sel-ok").onclick = () => {
+    if(!cur.size){ toast("1つ以上の銘柄をオンにしてください"); return; }
+    mapState.selMode = "select"; mapState.selected = cur;
+    bg.remove(); renderMap();
   };
 }
 
