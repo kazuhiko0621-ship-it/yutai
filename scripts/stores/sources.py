@@ -547,6 +547,40 @@ def sugidama(pr):
 
 
 # ---------------------------------------------------------------------------
+# テンアライド（公式の店舗検索：県ページ → 市区町村ページの店舗一覧）
+# ---------------------------------------------------------------------------
+TENG_BRANDS = ["旬鮮酒場天狗", "テング酒場", "和食れすとらん天狗", "ミートキッチンlog50", "神田屋", "てんぐ大ホール",
+               "湊や磯吉食堂", "湊や磯吉", "磯吉食堂"]
+
+
+def teng(pr):
+    import html as H
+    import re
+    base = "https://www.teng.co.jp"
+    try:
+        top = get(f"{base}/shopsearch/shops/{pr.romaji}/", as_json=False, retries=0)
+    except RuntimeError as e:
+        if "404" in str(e):
+            return []  # その県に店舗がない
+        raise
+    cities = sorted(set(re.findall(r'href="(/shopsearch/shops/%s/[^"/]+/)"' % pr.romaji, top)))
+    rows = {}
+    for c in cities:
+        body = get(base + c, as_json=False)
+        for box in re.findall(r'<div class="list-shop-box">(.*?)<div class="list-icons">', body, re.S):
+            link = re.search(r'<a href="(/shopsearch/shops/[^"]+\.html)">(.*?)</a>', box, re.S)
+            addr = re.search(r'<div class="list-adress">(.*?)</div>', box, re.S)
+            if not (link and addr):
+                continue
+            name = re.sub(r"\s+", " ", H.unescape(re.sub(r"<[^>]+>", "", link.group(2)))).strip()
+            a = H.unescape(re.split(r"<br\s*/?>", addr.group(1))[0]).strip()
+            brand = next((b for b in TENG_BRANDS if name.startswith(b)), name.split(" ")[0])
+            rows[link.group(1)] = {"id": link.group(1).rsplit("/", 1)[-1].replace(".html", ""), "b": brand,
+                                   "n": name[len(brand):].strip() or name, "a": re.sub(r"\s+", "", a)}
+    return list(rows.values())
+
+
+# ---------------------------------------------------------------------------
 # 登録一覧（code は優待手帳の銘柄マスタのコードと一致させる）
 # ---------------------------------------------------------------------------
 SOURCES = [
@@ -655,5 +689,10 @@ SOURCES = [
         "url": "https://www.sugidama-sushiizakaya.jp/shop/",
         "note": "杉玉のみ収録（京樽は未収録）",
         "fetch": sugidama,
+    },
+    {
+        "code": "8207", "name": "テンアライド", "brands": ["テング酒場", "旬鮮酒場天狗", "神田屋", "湊や磯吉食堂"],
+        "url": "https://www.teng.co.jp/shopsearch/",
+        "fetch": teng,
     },
 ]
