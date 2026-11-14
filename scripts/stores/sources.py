@@ -478,7 +478,7 @@ def create_restaurants_pdf():
         addr = " ".join(i["s"].strip() for i in its if 230 <= i["x"] < 630)
         tel = "".join(i["s"].strip() for i in its if 630 <= i["x"] < 690)
         if name and addr:
-            rows.append({"pref": pref, "b": name[0], "n": " ".join(name[1:]), "a": addr, "tel": tel})
+            rows.append({"pref": pref, "b": name[0], "n": " ".join(name[1:]) or name[0], "a": addr, "tel": tel})
     if len(rows) < 100:
         raise RuntimeError(f"PDFの読み取り件数が少なすぎます（{len(rows)}件）")
     print(f"[info] クリエイト・レストランツ 優待店舗PDF: {url.rsplit('/', 1)[-1]} から {len(rows)}件")
