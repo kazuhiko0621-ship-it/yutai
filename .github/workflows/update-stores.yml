@@ -35,6 +35,11 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: PDF読み取り用ライブラリを準備
+        run: npm install --prefix scripts/stores --no-audit --no-fund
       - name: 店舗を収集
         env:
           PREFS: ${{ github.event.inputs.prefs }}

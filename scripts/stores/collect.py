@@ -165,7 +165,7 @@ def main(only_codes, forced_prefs):
                    for s in rows_out]
 
     order = list(PREFS)
-    stores.sort(key=lambda s: (order.index(s["p"]) if s.get("p") in PREFS else 99, s["c"], s["a"], s["n"]))
+    stores.sort(key=lambda s: (order.index(s["p"]) if s.get("p") in PREFS else 99, s["c"], s.get("a", ""), s.get("n", "")))
     area_list = sorted(set(refresh) | set(keep), key=order.index)
     area_info = {p: {"count": sum(1 for s in stores if s.get("p") == p),
                      "auto_update": (areas or DEFAULT_AREAS).get(p, False),

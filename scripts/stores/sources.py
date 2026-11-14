@@ -401,18 +401,87 @@ def create_restaurants_all():
 
 
 def create_restaurants(pr):
+    """株主優待のページにある「優待利用可能店舗の一覧」PDFを正とする。
+    座標は公式サイトの店舗データ（電話番号で照合）から取り、なければ住所から求める。"""
+    import hashlib
     import re
-    PREF = pr.name
-    rows = []
+    tel_geo = {}
     for x in create_restaurants_all():
-        if x.get("pref_name") != PREF or x.get("shareholder") != "available" or str(x.get("status")) != "1":
+        tel = re.sub(r"\D", "", x.get("tel_number") or "")
+        if tel and x.get("latitude"):
+            tel_geo[tel] = (float(x["latitude"]), float(x["longitude"]))
+    rows = []
+    for r in create_restaurants_pdf():
+        if r["pref"] != pr.name:
             continue
-        name = re.sub(r"[ 　]+", " ", x["name_jp"]).strip()
-        brand = name.split(" ")[0]
-        rows.append({"id": x["store_id"], "b": brand, "n": name[len(brand):].strip() or name,
-                     "a": PREF + x.get("address1_jp", "") + re.sub(r"[ 　].*$", "", x.get("address2_jp", "")),
-                     "lat": float(x["latitude"]) if x.get("latitude") else None,
-                     "lng": float(x["longitude"]) if x.get("longitude") else None})
+        ll = tel_geo.get(re.sub(r"\D", "", r["tel"]))
+        key = hashlib.md5((r["b"] + "|" + r["n"] + "|" + r["a"]).encode("utf-8")).hexdigest()[:10]
+        row = {"id": "pdf-" + key,
+               "b": r["b"], "n": r["n"], "a": pr.name + r["a"].split(" ")[0],
+               "lat": ll[0] if ll else None, "lng": ll[1] if ll else None}
+        # 注記で一部コーナーが対象外とされている店舗
+        if re.search(r"上郷SA|長篠設楽原PA|遠州森町PA|賤ヶ岳SA|龍野西SA|三芳PA|牧之原SA|神田PA|関SA", r["a"] + r["b"]):
+            row["x"] = "一部コーナーは優待対象外"
+        rows.append(row)
+    return rows
+
+
+@once
+def create_restaurants_pdf():
+    """優待利用可能店舗一覧PDFを読み、[{pref, b, n, a, tel}] を返す（全国分）"""
+    import json as J
+    import re
+    import subprocess
+    import tempfile
+    import urllib.request
+    from pathlib import Path
+    from common import UA
+    from prefs import PREFS
+    page = get("https://www.createrestaurants.com/ir/stock/shareholder/", as_json=False)
+    m = (re.search(r'href="([^"]+\.pdf)"[^>]*>(?:\s*<[^>]+>)*\s*優待利用可能店舗', page)
+         or re.search(r'href="([^"]*/wp-content/uploads/[^"]*%E5%BA%97%E8%88%97%E4%B8%80%E8%A6%A7[^"]*\.pdf)"', page))
+    if not m:
+        raise RuntimeError("優待利用可能店舗一覧のPDFが見つかりません")
+    import html
+    import urllib.parse
+    url = html.unescape(m.group(1))
+    url = url if url.startswith("http") else "https://www.createrestaurants.com" + url
+    url = urllib.parse.quote(url, safe=":/%?=&")  # ファイル名の日本語をURLエンコード
+    with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as f:
+        with urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": UA}), timeout=120) as r:
+            f.write(r.read())
+        pdf_path = f.name
+    here = Path(__file__).resolve().parent
+    out_path = pdf_path + ".json"
+    r = subprocess.run(["node", str(here / "pdf_items.mjs"), pdf_path, out_path], capture_output=True, text=True, cwd=here)
+    if r.returncode != 0 or not Path(out_path).exists():
+        raise RuntimeError(f"PDFの読み取りに失敗: {(r.stderr or r.stdout)[-300:]}")
+    items = J.loads(Path(out_path).read_text(encoding="utf-8"))
+    print(f"[info] クリエイト・レストランツ PDF: {Path(pdf_path).stat().st_size}バイト・文字要素{len(items)}個")
+    # 同じ行（y座標の差2以内）をまとめ、x座標で 店名(〜230) / 住所(230〜630) / 電話(630〜690) に分ける
+    lines = []
+    for it in sorted(items, key=lambda i: (i["p"], -i["y"], i["x"])):
+        if lines and lines[-1]["p"] == it["p"] and abs(lines[-1]["y"] - it["y"]) <= 2:
+            lines[-1]["its"].append(it)
+        else:
+            lines.append({"p": it["p"], "y": it["y"], "its": [it]})
+    rows, pref = [], None
+    for ln in lines:
+        its = sorted(ln["its"], key=lambda i: i["x"])
+        text = "".join(i["s"].strip() for i in its)
+        if len(its) == 1 and its[0]["x"] < 40:  # 見出し（都道府県名。それ以外の見出しでは収録しない）
+            pref = text if text in PREFS else None
+            continue
+        if not pref:
+            continue
+        name = [i["s"].strip() for i in its if i["x"] < 230]
+        addr = " ".join(i["s"].strip() for i in its if 230 <= i["x"] < 630)
+        tel = "".join(i["s"].strip() for i in its if 630 <= i["x"] < 690)
+        if name and addr:
+            rows.append({"pref": pref, "b": name[0], "n": " ".join(name[1:]) or name[0], "a": addr, "tel": tel})
+    if len(rows) < 100:
+        raise RuntimeError(f"PDFの読み取り件数が少なすぎます（{len(rows)}件）")
+    print(f"[info] クリエイト・レストランツ 優待店舗PDF: {url.rsplit('/', 1)[-1]} から {len(rows)}件")
     return rows
 
 
@@ -699,7 +768,7 @@ SOURCES = [
     {
         "code": "3387", "name": "クリエイト・レストランツ・ホールディングス", "brands": ["磯丸水産", "しゃぶ菜", "菜菜麻辣湯"],
         "url": "https://www.create-restaurants.co.jp/",
-        "note": "公式の店舗データで「株主優待利用可」の店舗のみ",
+        "note": "公式の「優待利用可能店舗の一覧」（PDF）に載っている店舗",
         "fetch": create_restaurants,
     },
     {
