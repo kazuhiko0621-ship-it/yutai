@@ -442,7 +442,11 @@ def create_restaurants_pdf():
          or re.search(r'href="([^"]*/wp-content/uploads/[^"]*%E5%BA%97%E8%88%97%E4%B8%80%E8%A6%A7[^"]*\.pdf)"', page))
     if not m:
         raise RuntimeError("優待利用可能店舗一覧のPDFが見つかりません")
-    url = m.group(1) if m.group(1).startswith("http") else "https://www.createrestaurants.com" + m.group(1)
+    import html
+    import urllib.parse
+    url = html.unescape(m.group(1))
+    url = url if url.startswith("http") else "https://www.createrestaurants.com" + url
+    url = urllib.parse.quote(url, safe=":/%?=&")  # ファイル名の日本語をURLエンコード
     with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as f:
         with urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": UA}), timeout=120) as r:
             f.write(r.read())
