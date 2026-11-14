@@ -452,8 +452,12 @@ def create_restaurants_pdf():
             f.write(r.read())
         pdf_path = f.name
     here = Path(__file__).resolve().parent
-    items = J.loads(subprocess.run(["node", str(here / "pdf_items.mjs"), pdf_path], capture_output=True,
-                                   check=True, cwd=here).stdout)
+    out_path = pdf_path + ".json"
+    r = subprocess.run(["node", str(here / "pdf_items.mjs"), pdf_path, out_path], capture_output=True, text=True, cwd=here)
+    if r.returncode != 0 or not Path(out_path).exists():
+        raise RuntimeError(f"PDFの読み取りに失敗: {(r.stderr or r.stdout)[-300:]}")
+    items = J.loads(Path(out_path).read_text(encoding="utf-8"))
+    print(f"[info] クリエイト・レストランツ PDF: {Path(pdf_path).stat().st_size}バイト・文字要素{len(items)}個")
     # 同じ行（y座標の差2以内）をまとめ、x座標で 店名(〜230) / 住所(230〜630) / 電話(630〜690) に分ける
     lines = []
     for it in sorted(items, key=lambda i: (i["p"], -i["y"], i["x"])):
